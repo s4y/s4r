@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<style>
+
+html, body {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: black;
+}
+
+#c {
+  position: absolute;
+  display: block;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#ed {
+  font: 14px monospace;
+  position: relative;
+  display: flex;
+  height: 100%;
+}
+
+#ed textarea {
+  font: inherit;
+  background: none;
+  border: none;
+  flex: 1;
+  outline: none;
+  resize: none;
+  position: absolute;
+}
+
+#ed textarea, #ed #underlay, #ed #overlay {
+  margin: 0;
+  padding: 0.5em;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+#underlay, #overlay {
+  color: transparent;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+  position: absolute;
+  white-space: pre-wrap;
+}
+
+#ed #underlay span {
+  background: rgb(255, 255, 255);
+  opacity: 0.7;
+  box-shadow: 0 0 5px 5px white;
+}
+#ed #overlay .number {
+  color: rgba(50, 10, 255, 255);
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: 3px;
+}
+
+</style>
+<canvas id=c></canvas>
+<div id=ed>
+  <div id=underlay></div>
+  <textarea id=ta spellcheck=false></textarea>
+  <div id=overlay></div>
+</div>
+<script>
+
+const gl = c.getContext('webgl', { alpha: false, powerPreference: 'low-power' });
+
+const mesh = new Float32Array([
+  -1, 1, 0, -1, -1, 0,
+  1, 1, 0, 1, -1, 0,
+]);
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+
+const vs = gl.createShader(gl.VERTEX_SHADER);
+let program;
+
+const defaultProgram = `
+gl_FragColor = vec4(0.5);
+`;
+
+const macros = {
+  draw(body) {
+    return `gl_FragColor = ${body}`;
+  },
+  def(body) {
+    this.head += body;
+  },
+};
+
+const preprocessFragShader = s => {
+  return s.replace(/^(\s*):(\S+)\s+(.+)$/mg, (m, ws, kw, body) => ws + macros[kw](body));
+}
+
+const wrapFragShader = (body, defs) => `
+precision mediump float;
+
+varying vec3 p;
+uniform float t;
+
+${defs || ""}
+
+void main() {
+${body}
+}
+`;
+
+ta.value = localStorage.prog || defaultProgram;
+
+gl.shaderSource(vs, `
+attribute vec3 p_in;
+varying vec3 p;
+
+void main() {
+  p = p_in;
+  gl_Position = vec4(p_in, 1.);
+}
+`);
+gl.compileShader(vs);
+
+const draw = () => {
+  if (!program)
+    return;
+  const tLoc = gl.getUniformLocation(program, "t");
+  if (tLoc)
+    gl.uniform1f(tLoc, ((new Date()/1000)%32768));
+  const pLoc = gl.getUniformLocation(program, "p_in");
+  gl.enableVertexAttribArray(pLoc);
+  gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, mesh.length / 3);
+}
+
+const compileFragShader = s => {
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, s);
+  gl.compileShader(fs);
+  if (gl.getShaderParameter(fs, gl.COMPILE_STATUS))
+    return fs;
+  console.log(s);
+  console.log(gl.getShaderInfoLog(fs));
+}
+
+let oldFsSource = null;
+
+const updateFrag = () => {
+  const newProgram = gl.createProgram();
+  const newShaderText = preprocessFragShader(ta.value);
+  const fs = compileFragShader(wrapFragShader(newShaderText))
+  const fadeFsText = (oldFsSource !== null) && wrapFragShader(`
+    gl_FragColor = vec4(0.);
+    a();
+    vec4 aColor = gl_FragColor;
+    gl_FragColor = vec4(0.);
+    b();
+    vec4 bColor = gl_FragColor;
+    gl_FragColor = mix(aColor, bColor, clamp(t - ${performance.now()/1000}, 0., 1.));
+    `, `
+    void a() {
+      ${oldFsSource}
+    }
+
+    void b() {
+      ${newShaderText}
+    }
+  `);
+  const fadeFs = fadeFsText ? compileFragShader(fadeFsText) : fs;
+
+  if (!fadeFs)
+    return;
+
+  if (fadeFs != fs) {
+    setTimeout(() => {
+      gl.detachShader(newProgram, fadeFs);
+      gl.attachShader(newProgram, fs);
+      gl.linkProgram(newProgram);
+    }, 1000);
+  }
+  gl.attachShader(newProgram, vs);
+  gl.attachShader(newProgram, fadeFs);
+  gl.linkProgram(newProgram);
+  if (!gl.getProgramParameter(newProgram, gl.LINK_STATUS)) {
+    console.log(fadeFsText);
+    console.log(gl.getProgramInfoLog(newProgram));
+    return;
+  }
+  gl.useProgram(newProgram);
+  program = newProgram;
+  oldFsSource = newShaderText;
+}
+
+const parse = (s) => {
+  const re = /\b(?:\d+(?:\.\d+)?|(?:\.\d+))\b/g;
+  const chunks = [];
+  let pos = 0;
+  for (;;) {
+    const m = re.exec(s);
+    const mLength = m ? m[0].length : 0;
+    const pre = m
+      ? s.substring(pos, re.lastIndex - m[0].length)
+      : s.substring(pos);
+    pos = re.lastIndex;
+    if (pre.length)
+      chunks.push({ type: 'text', text: pre });
+    if (!m)
+      break;
+    chunks.push({ type: 'number', text: m[0] });
+  }
+  return chunks;
+}
+
+const resize = () => {
+  c.width = c.clientWidth * devicePixelRatio;
+  c.height = c.clientHeight * devicePixelRatio;
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  draw();
+};
+
+window.addEventListener('resize', resize);
+resize();
+
+const transfer = () => {
+  underlay.innerHTML = "";
+  const bgEl = document.createElement('span');
+  bgEl.textContent = ta.value;
+  underlay.appendChild(bgEl);
+
+  overlay.innerHTML = "";
+  const chunks = parse(ta.value);
+  for (const chunk of chunks) {
+    const el = document.createElement('span');
+    el.textContent = chunk.text;
+    if (chunk.type === "number") {
+      el.classList.add('number');
+    }
+      overlay.appendChild(el);
+  }
+  localStorage.prog = ta.value;
+}
+
+ta.addEventListener('input', e => {
+  transfer();
+  updateFrag();
+  draw();
+});
+transfer();
+updateFrag();
+
+// const paramValues = () => {
+//   gl.getUniformLocation(program, "p_in");
+// }
+
+const handleAnimationFrame = () => {
+  draw();
+  requestAnimationFrame(handleAnimationFrame);
+}
+requestAnimationFrame(handleAnimationFrame);
+
+</script>
