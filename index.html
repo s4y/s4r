@@ -27,6 +27,10 @@ body {
   height: 100%;
 }
 
+body.view #ed {
+  display: none;
+}
+
 #ed textarea {
   font: inherit;
   background: none;
@@ -89,7 +93,16 @@ const vs = gl.createShader(gl.VERTEX_SHADER);
 let program;
 
 const defaultProgram = `
-gl_FragColor = vec4(0.5);
+:def unbal + .5 / 2.
+:fn sin 1
+:fn vec4 4
+   
+p.x
+* 3
++ * t 3
+unbal sin
+draw vec4 x4
+
 `;
 
 const macros = {
@@ -106,10 +119,14 @@ const preprocessFragShader = s => {
 }
 
 const wrapFragShader = (body, defs) => `
-precision mediump float;
+precision highp float;
 
 varying vec3 p;
 uniform float t;
+
+float easeInOutQuad(float t) {
+  return t<.5 ? 2.*t*t : -1.+(4.-2.*t)*t;
+}
 
 ${defs || ""}
 
@@ -136,7 +153,7 @@ const draw = () => {
     return;
   const tLoc = gl.getUniformLocation(program, "t");
   if (tLoc)
-    gl.uniform1f(tLoc, ((new Date()/1000)%32768));
+    gl.uniform1f(tLoc, ((new Date()/1000)%(2<<16)));
   const pLoc = gl.getUniformLocation(program, "p_in");
   gl.enableVertexAttribArray(pLoc);
   gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
@@ -155,9 +172,96 @@ const compileFragShader = s => {
 
 let oldFsSource = null;
 
+const parse = s => {
+  const tokens = [];
+  const ops = [];
+  const line = [];
+  for (const [chunk] of (s + '\n').matchAll(/(\s+|\S+)/g)) {
+    const tok = getToken(chunk);
+    if (tok.type === 'whitespace') {
+      if (tok.breaksLine) {
+        if (line.length && line[0].type == 'directive') {
+          if (line[0].value === 'def') {
+            ops.push({
+              type: 'define',
+              name: line[1].value,
+              ops: line.slice(2).reverse(),
+            });
+          } else if (line[0].value === 'fn') {
+            const name = line[1].value
+            const arity = line[2].value;
+            ops.push({
+              type: 'define',
+              name,
+              ops: [{ type: 'native', fn: stack => {
+                stack.push(`${name}(${stack.splice(stack.length-arity, arity).join(', ')})`);
+              }}],
+            });
+          } else {
+            throw new Error('bad directive');
+          }
+        } else {
+          ops.push(...line.reverse());
+        }
+        line.length = 0;
+      }
+    } else {
+      line.push(tok);
+    }
+  }
+  return ops;
+}
+
+const compile = parseTree => {
+  const defs = {
+    draw: [{ type: 'native', fn: stack => {
+      stack.push(`gl_FragColor = ${stack.pop()}`);
+    }}],
+    x4: [{ type: 'native', fn: stack => {
+      for (let i = 0; i < 4; i++)
+        stack.push(stack[stack.length-1]);
+    }}],
+  };
+  let stack = [];
+  let source = '';
+  const doOps = ops => {
+    for (const op of ops) {
+      if (op.type === 'define') {
+        defs[op.name] = op.ops;
+      } else if (op.type === 'operator') {
+        stack.push(`(${[stack.pop(), op.value, stack.pop()].reverse().join(' ')})`);
+      } else if (op.type === 'number') {
+        let ns = op.value.toString();
+        if (ns.indexOf('.') === -1)
+          ns += '.';
+        stack.push(ns);
+      } else if (op.type === 'keyword') {
+        const def = defs[op.value];
+        if (def) {
+          doOps(def);
+        } else {
+          stack.push(op.value);
+        }
+      } else if (op.type === 'native') {
+        op.fn(stack);
+      } else {
+        throw new Error('idk what this thing is: ' + JSON.stringify(op));
+      }
+    }
+  };
+  doOps(parseTree);
+  console.log('complied to:', defs, stack, source);
+  return stack.pop() + ';';
+  // ${source}`;
+}
+
 const updateFrag = () => {
+  const newParseTree = parse(ta.value);
+  console.log(newParseTree);
+  const newShaderSource = compile(newParseTree);
+
   const newProgram = gl.createProgram();
-  const newShaderText = preprocessFragShader(ta.value);
+  const newShaderText = preprocessFragShader(newShaderSource);
   const fs = compileFragShader(wrapFragShader(newShaderText))
   const fadeFsText = (oldFsSource !== null) && wrapFragShader(`
     gl_FragColor = vec4(0.);
@@ -166,7 +270,7 @@ const updateFrag = () => {
     gl_FragColor = vec4(0.);
     b();
     vec4 bColor = gl_FragColor;
-    gl_FragColor = mix(aColor, bColor, clamp(t - ${performance.now()/1000}, 0., 1.));
+    gl_FragColor = mix(aColor, bColor, easeInOutQuad(clamp(t - ${new Date()/1000%(2<<16)}, 0., 1.)));
     `, `
     void a() {
       ${oldFsSource}
@@ -201,26 +305,6 @@ const updateFrag = () => {
   oldFsSource = newShaderText;
 }
 
-const parse = (s) => {
-  const re = /\b(?:\d+(?:\.\d+)?|(?:\.\d+))\b/g;
-  const chunks = [];
-  let pos = 0;
-  for (;;) {
-    const m = re.exec(s);
-    const mLength = m ? m[0].length : 0;
-    const pre = m
-      ? s.substring(pos, re.lastIndex - m[0].length)
-      : s.substring(pos);
-    pos = re.lastIndex;
-    if (pre.length)
-      chunks.push({ type: 'text', text: pre });
-    if (!m)
-      break;
-    chunks.push({ type: 'number', text: m[0] });
-  }
-  return chunks;
-}
-
 const resize = () => {
   c.width = c.clientWidth * devicePixelRatio;
   c.height = c.clientHeight * devicePixelRatio;
@@ -230,6 +314,19 @@ const resize = () => {
 
 window.addEventListener('resize', resize);
 resize();
+
+const getToken = text => {
+  if (/\s+/.test(text))
+    return { type: 'whitespace', breaksLine: text.indexOf('\n') != -1, text };
+  const numberValue = +text;
+  if (!isNaN(numberValue))
+    return { type: 'number', value: numberValue };
+  if (text[0] === ':')
+    return { type: 'directive', text, value: text.substr(1) };
+  if (!/^[a-zA-Z]/.test(text))
+    return { type: 'operator', text, value: text };
+  return { type: 'keyword', text, value: text };;
+};
 
 const transfer = () => {
   underlay.innerHTML = "";
@@ -250,11 +347,27 @@ const transfer = () => {
   localStorage.prog = ta.value;
 }
 
+ta.addEventListener('keydown', e => {
+  if (e.keyCode == 13 && e.metaKey) {
+    e.preventDefault();
+    window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: ta.value }));
+    return;
+  }
+});
+
 ta.addEventListener('input', e => {
   transfer();
   updateFrag();
-  draw();
 });
+
+if (location.search == '?view') {
+  document.body.classList.add('view');
+  window.addEventListener('broadcast', e => {
+    ta.value = e.detail;
+    updateFrag();
+  });
+}
+
 transfer();
 updateFrag();
 
