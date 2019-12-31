@@ -42,6 +42,7 @@ body.view #ed {
 }
 
 #ed textarea, #ed #underlay, #ed #overlay {
+  color: white;
   margin: 0;
   padding: 0.5em;
   box-sizing: border-box;
@@ -49,7 +50,7 @@ body.view #ed {
   height: 100%;
 }
 
-#underlay, #overlay {
+#ed #underlay, #ed #overlay {
   color: transparent;
   pointer-events: none;
   -webkit-user-select: none;
@@ -59,9 +60,9 @@ body.view #ed {
 }
 
 #ed #underlay span {
-  background: rgb(255, 255, 255);
-  opacity: 0.7;
-  box-shadow: 0 0 5px 5px white;
+  background: black;
+  opacity: 0.8;
+  box-shadow: 0 0 5px 5px black;
 }
 #ed #overlay .number {
   color: rgba(50, 10, 255, 255);
@@ -79,7 +80,9 @@ body.view #ed {
 </div>
 <script>
 
-const gl = c.getContext('webgl', { alpha: false, powerPreference: 'low-power' });
+const prog = location.search == '?view';
+
+const gl = c.getContext('webgl', { alpha: false, powerPreference: prog ? 'high-performance' : 'low-power' });
 
 const mesh = new Float32Array([
   -1, 1, 0, -1, -1, 0,
@@ -105,6 +108,48 @@ draw vec4 x4
 
 `;
 
+const createAudioAnalyser = () => {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const analyser = ac.createAnalyser();
+  ac.resume();
+
+  navigator.mediaDevices.getUserMedia({
+    video: false,
+    audio: true,
+    noiseSuppression: false,
+    echoCancellation: false,
+  })
+  .then(s => {
+    const source = ac.createMediaStreamSource(s);
+    source.connect(analyser);
+  });
+
+  const updateable = (obj, update) => {
+    let lastUpdateTime = 0;
+    return () => {
+      let now = performance.now();
+      if (this.lastUpdateTime != now) {
+        update(obj);
+        this.lastUpdateTime = now;
+      }
+      return obj;
+    };
+  };
+
+  const getByteFreqData = updateable(new Uint8Array(512), data => {
+    analyser.getByteFrequencyData(data);
+    console.log(data);
+  });
+  const getByteTimeData = updateable(new Uint8Array(1024), data => {
+    analyser.getByteTimeData(data);
+  });
+
+  return {
+    get byteFreqData() { return getByteFreqData(); },
+    get byteTimeData() { return getByteTimeData(); },
+  };
+};
+
 const macros = {
   draw(body) {
     return `gl_FragColor = ${body}`;
@@ -112,6 +157,9 @@ const macros = {
   def(body) {
     this.head += body;
   },
+};
+
+const globals = {
 };
 
 const preprocessFragShader = s => {
@@ -148,12 +196,12 @@ void main() {
 `);
 gl.compileShader(vs);
 
-const draw = () => {
+const draw = t => {
   if (!program)
     return;
   const tLoc = gl.getUniformLocation(program, "t");
   if (tLoc)
-    gl.uniform1f(tLoc, ((new Date()/1000)%(2<<16)));
+    gl.uniform1f(tLoc, t);
   const pLoc = gl.getUniformLocation(program, "p_in");
   gl.enableVertexAttribArray(pLoc);
   gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
@@ -212,7 +260,50 @@ const parse = s => {
   return ops;
 }
 
+let runContinuously = true;
+let timeVelocity = 1;
+let t = 0;
+let startTime = sessionStorage.startTime;
+if (!startTime)
+  startTime = sessionStorage.startTime = +new Date();
+let tref = startTime;
+let running = false;
+
+const kickstart = () => {
+  timeVelocity = Math.max(timeVelocity, 1);
+  if (!running) {
+    requestAnimationFrame(handleAnimationFrame);
+    running = true;
+  }
+}
+
+const handleAnimationFrame = () => {
+  const now = +new Date();
+  if (timeVelocity === 1) {
+    t += now - tref;
+  } else if (timeVelocity < 0.05) {
+    timeVelocity = 0;
+  } else {
+    t += (now - tref) * timeVelocity
+  }
+  tref = now;
+  if (!runContinuously && timeVelocity > 0)
+    timeVelocity *= 0.99;
+
+  draw(t/1000);
+  if (!timeVelocity) {
+    running = false;
+  } else {
+    requestAnimationFrame(handleAnimationFrame);
+  }
+}
+
+kickstart();
+
+
 const compile = parseTree => {
+  let stack = [];
+  let source = '';
   const defs = {
     draw: [{ type: 'native', fn: stack => {
       stack.push(`gl_FragColor = ${stack.pop()}`);
@@ -221,9 +312,18 @@ const compile = parseTree => {
       for (let i = 0; i < 4; i++)
         stack.push(stack[stack.length-1]);
     }}],
+    tvel: [{ type: 'native', fn: stack => {
+      timeVelocity = stack.pop();
+      kickstart();
+    }}],
+    sound_freq: [{ type: 'native', fn: stack => {
+      if (!globals.audioAnalyser)
+        globals.audioAnalyser = createAudioAnalyser();
+      const bucket = +stack.pop;
+      const v = globals.audioAnalyser.byteFreqData[bucket];
+      stack.push((v/255).toString());
+    }}],
   };
-  let stack = [];
-  let source = '';
   const doOps = ops => {
     for (const op of ops) {
       if (op.type === 'define') {
@@ -270,7 +370,7 @@ const updateFrag = () => {
     gl_FragColor = vec4(0.);
     b();
     vec4 bColor = gl_FragColor;
-    gl_FragColor = mix(aColor, bColor, easeInOutQuad(clamp(t - ${new Date()/1000%(2<<16)}, 0., 1.)));
+    gl_FragColor = mix(aColor, bColor, easeInOutQuad(clamp(t - ${(tref-startTime)/1000}, 0., 1.)));
     `, `
     void a() {
       ${oldFsSource}
@@ -358,9 +458,10 @@ ta.addEventListener('keydown', e => {
 ta.addEventListener('input', e => {
   transfer();
   updateFrag();
+  kickstart();
 });
 
-if (location.search == '?view') {
+if (prog) {
   document.body.classList.add('view');
   window.addEventListener('broadcast', e => {
     ta.value = e.detail;
@@ -374,11 +475,5 @@ updateFrag();
 // const paramValues = () => {
 //   gl.getUniformLocation(program, "p_in");
 // }
-
-const handleAnimationFrame = () => {
-  draw();
-  requestAnimationFrame(handleAnimationFrame);
-}
-requestAnimationFrame(handleAnimationFrame);
 
 </script>
