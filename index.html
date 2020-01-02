@@ -83,6 +83,9 @@ body.view #ed {
 const prog = location.search == '?view';
 
 const gl = c.getContext('webgl', { alpha: false, powerPreference: prog ? 'high-performance' : 'low-power' });
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
 
 const mesh = new Float32Array([
   -1, 1, 0, -1, -1, 0,
@@ -111,6 +114,7 @@ draw vec4 x4
 const createAudioAnalyser = () => {
   const ac = new (window.AudioContext || window.webkitAudioContext)();
   const analyser = ac.createAnalyser();
+  // analyser.smoothingTimeConstant = 0.2;
   ac.resume();
 
   navigator.mediaDevices.getUserMedia({
@@ -138,7 +142,6 @@ const createAudioAnalyser = () => {
 
   const getByteFreqData = updateable(new Uint8Array(512), data => {
     analyser.getByteFrequencyData(data);
-    console.log(data);
   });
   const getByteTimeData = updateable(new Uint8Array(1024), data => {
     analyser.getByteTimeData(data);
@@ -170,7 +173,8 @@ const wrapFragShader = (body, defs) => `
 precision highp float;
 
 varying vec3 p;
-uniform float t;
+
+const float PI = asin(1.0) * 2.;
 
 float easeInOutQuad(float t) {
   return t<.5 ? 2.*t*t : -1.+(4.-2.*t)*t;
@@ -196,16 +200,18 @@ void main() {
 `);
 gl.compileShader(vs);
 
+let runtimeTasks = [];
+
 const draw = t => {
-  if (!program)
-    return;
-  const tLoc = gl.getUniformLocation(program, "t");
-  if (tLoc)
-    gl.uniform1f(tLoc, t);
-  const pLoc = gl.getUniformLocation(program, "p_in");
-  gl.enableVertexAttribArray(pLoc);
-  gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, mesh.length / 3);
+  // const tLoc = gl.getUniformLocation(program, "t");
+  // if (tLoc)
+  //   gl.uniform1f(tLoc, t);
+  // const pLoc = gl.getUniformLocation(program, "p_in");
+  // gl.enableVertexAttribArray(pLoc);
+  // gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
+  // gl.drawArrays(gl.TRIANGLE_STRIP, 0, mesh.length / 3);
+  for (const task of runtimeTasks)
+    task();
 }
 
 const compileFragShader = s => {
@@ -224,8 +230,19 @@ const parse = s => {
   const tokens = [];
   const ops = [];
   const line = [];
-  for (const [chunk] of (s + '\n').matchAll(/(\s+|\S+)/g)) {
+  let inComment = false;
+  for (const [chunk] of (s + '\n').matchAll(/(\s+|#|\S+)/g)) {
+    if (chunk === '#') {
+      inComment = true;
+      continue;
+    }
     const tok = getToken(chunk);
+    if (inComment) {
+      if (tok.breaksLine)
+        inComment = false;
+      else
+        continue;
+    }
     if (tok.type === 'whitespace') {
       if (tok.breaksLine) {
         if (line.length && line[0].type == 'directive') {
@@ -233,23 +250,24 @@ const parse = s => {
             ops.push({
               type: 'define',
               name: line[1].value,
-              ops: line.slice(2).reverse(),
+              ops: line.slice(2),
             });
           } else if (line[0].value === 'fn') {
-            const name = line[1].value
+            const name = line[1].value;
+            const glName = name.match(/^[^.]+/);
             const arity = line[2].value;
             ops.push({
               type: 'define',
               name,
               ops: [{ type: 'native', fn: stack => {
-                stack.push(`${name}(${stack.splice(stack.length-arity, arity).join(', ')})`);
+                stack.push(`${glName}(${stack.splice(stack.length-arity, arity).join(', ')})`);
               }}],
             });
           } else {
             throw new Error('bad directive');
           }
         } else {
-          ops.push(...line.reverse());
+          ops.push(...line);
         }
         line.length = 0;
       }
@@ -302,12 +320,20 @@ kickstart();
 
 
 const compile = parseTree => {
+  let uniform_seq = 0;
+  let tasks = [];
   let stack = [];
-  let source = '';
   const defs = {
+    t: [{ type: 'native', fn: stack => { stack.push("t"); }}],
+    p: [{ type: 'native', fn: stack => { stack.push("p"); }}],
+    aspect: [{ type: 'native', fn: stack => { stack.push("aspect"); }}],
+    PI: [{ type: 'native', fn: stack => { stack.push("PI"); }}],
     draw: [{ type: 'native', fn: stack => {
-      stack.push(`gl_FragColor = ${stack.pop()}`);
-    }}],
+      tasks.push({
+        type: 'draw',
+        frag: `gl_FragColor = ${stack.pop()};`,
+      });
+      }}],
     x4: [{ type: 'native', fn: stack => {
       for (let i = 0; i < 4; i++)
         stack.push(stack[stack.length-1]);
@@ -316,12 +342,24 @@ const compile = parseTree => {
       timeVelocity = stack.pop();
       kickstart();
     }}],
-    sound_freq: [{ type: 'native', fn: stack => {
+    sf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
-      const bucket = +stack.pop;
-      const v = globals.audioAnalyser.byteFreqData[bucket];
-      stack.push((v/255).toString());
+      const bucketStr = stack.pop();
+      const bucketNumber = +bucketStr;
+      const u_name = `u_${uniform_seq++}`;
+      if (isNaN(bucketNumber)) {
+      } else {
+        tasks.push({
+          type: 'set_uniform',
+          name: u_name,
+          valueType: 'float',
+          get value() {
+            return globals.audioAnalyser.byteFreqData[bucketNumber]/255;
+          }
+        });
+      }
+      stack.push(u_name);
     }}],
   };
   const doOps = ops => {
@@ -335,31 +373,103 @@ const compile = parseTree => {
         if (ns.indexOf('.') === -1)
           ns += '.';
         stack.push(ns);
-      } else if (op.type === 'keyword') {
+      } else if (op.type === 'word') {
         const def = defs[op.value];
         if (def) {
           doOps(def);
         } else {
-          stack.push(op.value);
+          throw new Error(`"${op.value}" is not defined.`);
         }
       } else if (op.type === 'native') {
         op.fn(stack);
+      } else if (op.type === 'swizzle') {
+        stack.push(`(${stack.pop()}).${op.components}`);
+      } else if (op.type === 'assign') {
+        const v = stack.pop();
+        defs[op.name] = [{ type: 'native', fn: stack => { stack.push(v); }}];
       } else {
         throw new Error('idk what this thing is: ' + JSON.stringify(op));
       }
     }
   };
   doOps(parseTree);
-  console.log('complied to:', defs, stack, source);
-  return stack.pop() + ';';
+  // console.log('complied to:', defs, stack, source);
+  return tasks;
   // ${source}`;
 }
 
 const updateFrag = () => {
   const newParseTree = parse(ta.value);
-  console.log(newParseTree);
-  const newShaderSource = compile(newParseTree);
+  // console.log(newParseTree);
+  const newTasks = compile(newParseTree);
 
+  let pendingUniforms = {
+    t: {
+      valueType: 'float',
+      get value() {
+        return t/1000;
+      }
+    },
+    aspect: {
+      valueType: 'float',
+      get value() {
+        return gl.drawingBufferWidth / gl.drawingBufferHeight;
+      }
+    },
+  };
+  let currentProg = null;
+
+  const newRuntimeTasks = [];
+  for (const task of newTasks) {
+    if (task.type == 'draw') {
+      let defs = "";
+      const uniforms = pendingUniforms;
+      for (const k in uniforms) {
+        const u = uniforms[k];
+        defs += `
+          uniform ${u.valueType} ${k};
+        `;
+      }
+      pendingUniforms = {};
+
+      const prog = gl.createProgram();
+      const shaderText = wrapFragShader(task.frag, defs);
+      console.log(shaderText);
+      const fs = compileFragShader(shaderText);
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.log(gl.getProgramInfoLog(prog));
+        return;
+      }
+      const pLoc = gl.getUniformLocation(prog, "p_in");
+      newRuntimeTasks.push(() => {
+        gl.useProgram(prog);
+        currentProg = prog;
+
+        for (const k in uniforms) {
+          const u = uniforms[k];
+          const loc = gl.getUniformLocation(prog, k);
+          const v = u.value;
+          gl.uniform1f(loc, u.value);
+        }
+
+        gl.enableVertexAttribArray(pLoc);
+        gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, mesh.length / 3);
+      });
+    } else if (task.type === 'set_uniform') {
+      pendingUniforms[task.name] = {
+        valueType: task.valueType,
+        get value() { return task.value; }
+      };
+    }
+  }
+  runtimeTasks = newRuntimeTasks;
+  return;
+
+  /*
   const newProgram = gl.createProgram();
   const newShaderText = preprocessFragShader(newShaderSource);
   const fs = compileFragShader(wrapFragShader(newShaderText))
@@ -392,6 +502,7 @@ const updateFrag = () => {
       gl.linkProgram(newProgram);
     }, 1000);
   }
+  */
   gl.attachShader(newProgram, vs);
   gl.attachShader(newProgram, fadeFs);
   gl.linkProgram(newProgram);
@@ -423,9 +534,13 @@ const getToken = text => {
     return { type: 'number', value: numberValue };
   if (text[0] === ':')
     return { type: 'directive', text, value: text.substr(1) };
+  if (/^\./.test(text))
+    return { type: 'swizzle', text, components: text.substr(1) };
+  if (/^=/.test(text))
+    return { type: 'assign', text, name: text.substr(1) };
   if (!/^[a-zA-Z]/.test(text))
     return { type: 'operator', text, value: text };
-  return { type: 'keyword', text, value: text };;
+  return { type: 'word', text, value: text };;
 };
 
 const transfer = () => {
