@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<meta name=viewport content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+iframe {
+  display: block;
+  margin: 0;
+  border: none;
+  width: 100%;
+  height: 100%;
+}
+
+#enableAudioContext {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  text-align: center;
+  padding: 1em;
+}
+
+#enableAudioContext:not(.visible) {
+  display: none;
+}
+</style>
+<div id=enableAudioContext>Give me some web audio</div>
+<iframe src="/"></iframe>
+<script>
+
+const ac = new (window.AudioContext || window.webkitAudioContext)();
+let source;
+const checkState = () => {
+  if (ac.state === 'suspended') {
+    enableAudioContext.classList.add('visible');
+    return;
+  }
+
+  enableAudioContext.classList.remove('visible');
+
+  if (source)
+    return;
+  navigator.mediaDevices.getUserMedia({
+    video: false,
+    audio: true,
+    noiseSuppression: false,
+    echoCancellation: false,
+  })
+  .then(s => {
+    source = ac.createMediaStreamSource(s);
+    source.connect(analyser);
+  });
+
+};
+enableAudioContext.addEventListener('click', e => {
+  ac.resume();
+});
+
+ac.addEventListener('statechange', checkState);
+checkState();
+
+const analyser = ac.createAnalyser();
+// analyser.smoothingTimeConstant = 0.2;
+ac.resume();
+
+window.audioAnalyser = analyser;
+  
+</script>

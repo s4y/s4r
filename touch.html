@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<meta name=viewport content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+
+html, body {
+  height: 100%;
+  font: 24px system-ui;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  background: black;
+  color: white;
+  margin: 0;
+}
+
+#pads {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#pads > li {
+  flex: 1;
+  background: #333;
+  border: 1px solid white;
+  border-radius: 0.2em;
+  margin: 0.25em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#pads > li:active {
+  background: #888;
+}
+
+#pads > li.touched {
+  background: red;
+}
+
+#pads > li::before {
+  content: attr(data-pad);
+}
+
+</style>
+<ul id=pads>
+  <li data-pad=1></li>
+  <li data-pad=2></li>
+  <li data-pad=3></li>
+</ul>
+<script>
+
+pads.addEventListener('touchstart', e => {
+  e.preventDefault();
+  e.target.classList.add('touched');
+  window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
+    type: 'pad',
+    which: e.target.dataset.pad,
+    x: e.touches[0].clientX,
+    y: e.touches[0].clientY,
+    pressed: true,
+  }}));
+});
+
+pads.addEventListener('touchmove', e => {
+  e.preventDefault();
+  e.target.classList.add('touched');
+  let boundingRect = e.target.getBoundingClientRect();
+  window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
+    type: 'pad',
+    which: e.target.dataset.pad,
+    x: (e.touches[0].clientX - boundingRect.left) / boundingRect.width,
+    y: (e.touches[0].clientY - boundingRect.top) / boundingRect.height,
+    pressed: true,
+  }}));
+});
+
+pads.addEventListener('touchend', e => {
+  e.target.classList.remove('touched');
+  window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
+    type: 'pad',
+    which: e.target.dataset.pad,
+    pressed: false,
+  }}));
+});
+
+</script>

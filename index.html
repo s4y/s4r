@@ -1,88 +1,52 @@
 <!DOCTYPE html>
-<style>
-
-html, body {
-  width: 100%;
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background: black;
-}
-
-#c {
-  position: absolute;
-  display: block;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-}
-
-#ed {
-  font: 14px monospace;
-  position: relative;
-  display: flex;
-  height: 100%;
-}
-
-body.view #ed {
-  display: none;
-}
-
-#ed textarea {
-  font: inherit;
-  background: none;
-  border: none;
-  flex: 1;
-  outline: none;
-  resize: none;
-  position: absolute;
-}
-
-#ed textarea, #ed #underlay, #ed #overlay {
-  color: white;
-  margin: 0;
-  padding: 0.5em;
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-}
-
-#ed #underlay, #ed #overlay {
-  color: transparent;
-  pointer-events: none;
-  -webkit-user-select: none;
-  user-select: none;
-  position: absolute;
-  white-space: pre-wrap;
-}
-
-#ed #underlay span {
-  background: black;
-  opacity: 0.8;
-  box-shadow: 0 0 5px 5px black;
-}
-#ed #overlay .number {
-  color: rgba(50, 10, 255, 255);
-  cursor: pointer;
-  pointer-events: auto;
-  border-radius: 3px;
-}
-
-</style>
+<meta name=viewport content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel=stylesheet href=style.css>
 <canvas id=c></canvas>
 <div id=ed>
-  <div id=underlay></div>
-  <textarea id=ta spellcheck=false></textarea>
-  <div id=overlay></div>
+  <div id=toolbar>
+    <ul class=tabs>
+      <li>common</li>
+      <li data-selected>proj</li>
+    </ul>
+  </div>
+  <div class=editor data-tab=common data-doc=common>
+   <div class=underlay></div>
+    <textarea class=ta spellcheck=false autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    <div class=overlay></div>
+  </div>
+  <div class=editor data-tab=proj data-doc=proj>
+    <div class=underlay></div>
+    <textarea class=ta spellcheck=false autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    <div class=overlay></div>
+  </div>
 </div>
+<div id=enableAudioContext>Give me some web audio</div>
 <script>
 
-const prog = location.search == '?view';
+window.hqs = location.hash
+  .substr(1)
+  .split('&')
+  .filter(v => v)
+  .map(c => c.split('=').map(decodeURIComponent))
+  .reduce((params, [k, v]) => (params[k] = v, params), {});
 
-const gl = c.getContext('webgl', { alpha: false, powerPreference: prog ? 'high-performance' : 'low-power' });
+const prog = 'id' in window.hqs;
+
+const pads = {};
+window.addEventListener('broadcast', e => {
+  const {type} = e.detail;
+  if (type != 'pad')
+    return;
+  const {which, pressed, x, y} = e.detail;
+  pads[which] = { pressed, x, y };
+});
+
+const gl = c.getContext('webgl', {
+  alpha: false,
+  antialias: false,
+  powerPreference: prog ? 'high-performance' : 'low-power',
+});
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
@@ -91,6 +55,7 @@ const mesh = new Float32Array([
   -1, 1, 0, -1, -1, 0,
   1, 1, 0, 1, -1, 0,
 ]);
+
 const buffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
 gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
@@ -98,35 +63,56 @@ gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
 const vs = gl.createShader(gl.VERTEX_SHADER);
 let program;
 
-const defaultProgram = `
-:def unbal + .5 / 2.
+const defaultProgram = 
+`:def unbal 2 / .5 +
 :fn sin 1
+:fn vec4.1 1
 :fn vec4 4
-   
-p.x
-* 3
-+ * t 3
-unbal sin
-draw vec4 x4
 
-`;
+p .x
+3 *
+3 t * +
+sin unbal
+vec4.1 draw`;
 
 const createAudioAnalyser = () => {
-  const ac = new (window.AudioContext || window.webkitAudioContext)();
-  const analyser = ac.createAnalyser();
-  // analyser.smoothingTimeConstant = 0.2;
-  ac.resume();
+  const analyser = window.top.audioAnalyser || (() => {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    let source;
+    const checkState = () => {
+      if (ac.state === 'suspended') {
+        enableAudioContext.classList.add('visible');
+        return;
+      }
 
-  navigator.mediaDevices.getUserMedia({
-    video: false,
-    audio: true,
-    noiseSuppression: false,
-    echoCancellation: false,
-  })
-  .then(s => {
-    const source = ac.createMediaStreamSource(s);
-    source.connect(analyser);
-  });
+      enableAudioContext.classList.remove('visible');
+
+      if (source)
+        return;
+      navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: true,
+        noiseSuppression: false,
+        echoCancellation: false,
+      })
+      .then(s => {
+        source = ac.createMediaStreamSource(s);
+        source.connect(analyser);
+      });
+
+    };
+    enableAudioContext.addEventListener('click', e => {
+      ac.resume();
+    });
+
+    ac.addEventListener('statechange', checkState);
+    checkState();
+
+    const analyser = ac.createAnalyser();
+    analyser.smoothingTimeConstant = 0.5;
+    ac.resume();
+    return analyser;
+  })();
 
   const updateable = (obj, update) => {
     let lastUpdateTime = 0;
@@ -140,7 +126,7 @@ const createAudioAnalyser = () => {
     };
   };
 
-  const getByteFreqData = updateable(new Uint8Array(512), data => {
+  const getByteFreqData = updateable(new Uint8Array(analyser.fftSize), data => {
     analyser.getByteFrequencyData(data);
   });
   const getByteTimeData = updateable(new Uint8Array(1024), data => {
@@ -153,21 +139,77 @@ const createAudioAnalyser = () => {
   };
 };
 
-const macros = {
-  draw(body) {
-    return `gl_FragColor = ${body}`;
-  },
-  def(body) {
-    this.head += body;
-  },
-};
+// const createFramebuffer = () => {
+//   const tex = gl.createTexture();
+//   gl.bindTexture(gl.TEXTURE_2D, tex);
+//   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+//   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+//   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+//   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+// };
+
+const createFB = (w, h) => {
+  const tex = gl.createTexture();
+  if (!w)
+    w = gl.drawingBufferWidth;
+  if (!h)
+    h = gl.drawingBufferHeight;
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(
+    gl.TEXTURE_2D, 0, gl.RGBA,
+    w, h, 0,
+    gl.RGBA, gl.UNSIGNED_BYTE, null
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  return {
+    tex,
+    fb,
+    w,
+    h,
+    aspect: w / h,
+    clear() {
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA,
+        w, h, 0,
+        gl.RGBA, gl.UNSIGNED_BYTE, null
+      );
+    },
+    attach(id) {
+      gl.activeTexture(gl['TEXTURE' + id]);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+    },
+    draw() {
+      // gl.generateMipmap(gl.TEXTURE_2D);
+    },
+    drawInto(f) {
+      const oldViewport = gl.getParameter(gl.VIEWPORT);
+      const oldFb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      try {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.viewport(0, 0, w, h);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+        f();
+      } finally {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, oldFb);
+        gl.viewport(...oldViewport);
+      }
+    },
+  };
+}
 
 const globals = {
 };
-
-const preprocessFragShader = s => {
-  return s.replace(/^(\s*):(\S+)\s+(.+)$/mg, (m, ws, kw, body) => ws + macros[kw](body));
-}
 
 const wrapFragShader = (body, defs) => `
 precision highp float;
@@ -187,7 +229,7 @@ ${body}
 }
 `;
 
-ta.value = localStorage.prog || defaultProgram;
+// ta.value = localStorage.prog || defaultProgram;
 
 gl.shaderSource(vs, `
 attribute vec3 p_in;
@@ -203,13 +245,6 @@ gl.compileShader(vs);
 let runtimeTasks = [];
 
 const draw = t => {
-  // const tLoc = gl.getUniformLocation(program, "t");
-  // if (tLoc)
-  //   gl.uniform1f(tLoc, t);
-  // const pLoc = gl.getUniformLocation(program, "p_in");
-  // gl.enableVertexAttribArray(pLoc);
-  // gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
-  // gl.drawArrays(gl.TRIANGLE_STRIP, 0, mesh.length / 3);
   for (const task of runtimeTasks)
     task();
 }
@@ -224,13 +259,12 @@ const compileFragShader = s => {
   console.log(gl.getShaderInfoLog(fs));
 }
 
-let oldFsSource = null;
-
 const parse = s => {
   const tokens = [];
   const ops = [];
   const line = [];
   let inComment = false;
+  let inDirective = false;
   for (const [chunk] of (s + '\n').matchAll(/(\s+|#|\S+)/g)) {
     if (chunk === '#') {
       inComment = true;
@@ -244,7 +278,7 @@ const parse = s => {
         continue;
     }
     if (tok.type === 'whitespace') {
-      if (tok.breaksLine) {
+      if (tok.breaksLine && (!inDirective || /\n$/.test(tok.text))) {
         if (line.length && line[0].type == 'directive') {
           if (line[0].value === 'def') {
             ops.push({
@@ -263,6 +297,13 @@ const parse = s => {
                 stack.push(`${glName}(${stack.splice(stack.length-arity, arity).join(', ')})`);
               }}],
             });
+          } else if (line[0].value === 'var') {
+            const name = line[1].value;
+            ops.push({
+              type: 'var',
+              name,
+              ops: line.slice(2),
+            });
           } else {
             throw new Error('bad directive');
           }
@@ -272,6 +313,8 @@ const parse = s => {
         line.length = 0;
       }
     } else {
+      if (tok.type == 'directive')
+        inDirective = true;
       line.push(tok);
     }
   }
@@ -288,11 +331,10 @@ let tref = startTime;
 let running = false;
 
 const kickstart = () => {
-  timeVelocity = Math.max(timeVelocity, 1);
-  if (!running) {
-    requestAnimationFrame(handleAnimationFrame);
-    running = true;
-  }
+  if (running)
+    return;
+  requestAnimationFrame(handleAnimationFrame);
+  running = true;
 }
 
 const handleAnimationFrame = () => {
@@ -316,56 +358,139 @@ const handleAnimationFrame = () => {
   }
 }
 
-kickstart();
-
-
 const compile = parseTree => {
   let uniform_seq = 0;
   let tasks = [];
   let stack = [];
-  const defs = {
+  let defs = {
     t: [{ type: 'native', fn: stack => { stack.push("t"); }}],
     p: [{ type: 'native', fn: stack => { stack.push("p"); }}],
     aspect: [{ type: 'native', fn: stack => { stack.push("aspect"); }}],
+    newfb: [{ type: 'native', fn: stack => { console.log('hithithit'); stack.push(0.5) }}],
+    // dims: [{ type: 'native', fn: stack => {
+    //   stack.push(gl.drawingBufferWidth);
+    //   stack.push(gl.drawingBufferHeight);
+    // }}],
     PI: [{ type: 'native', fn: stack => { stack.push("PI"); }}],
     draw: [{ type: 'native', fn: stack => {
       tasks.push({
         type: 'draw',
         frag: `gl_FragColor = ${stack.pop()};`,
       });
-      }}],
-    x4: [{ type: 'native', fn: stack => {
-      for (let i = 0; i < 4; i++)
-        stack.push(stack[stack.length-1]);
     }}],
     tvel: [{ type: 'native', fn: stack => {
-      timeVelocity = stack.pop();
+      const newTimeVelocity = +stack.pop();
+      if (isNaN(newTimeVelocity))
+        return;
+      timeVelocity = newTimeVelocity;
       kickstart();
     }}],
     sf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
+      const {audioAnalyser} = globals;
       const bucketStr = stack.pop();
-      const bucketNumber = +bucketStr;
-      const u_name = `u_${uniform_seq++}`;
+      const bucketNumber = Math.floor((Math.pow(2, +bucketStr) - 1) * audioAnalyser.byteFreqData.length);
       if (isNaN(bucketNumber)) {
+        if (!globals.audioAnalyserFreqFB) {
+          globals.audioAnalyserFreqFB = createFB(audioAnalyser.byteFreqData.length, 1);
+        }
+        tasks.push({
+          type: 'set_uniform',
+          name: 'u_freq',
+          valueType: 'sampler2D',
+          get value() {
+            return audioAnalyser.byteFreqData[bucketNumber]/255;
+          }
+        });
+        stack.push('u_freq');
+      } else {
+        const u_name = `u_${uniform_seq++}`;
+        tasks.push({
+          type: 'set_uniform',
+          name: u_name,
+          valueType: 'float',
+          get value() {
+            return audioAnalyser.byteFreqData[bucketNumber]/255;
+          }
+        });
+        stack.push(u_name);
+      }
+    }}],
+    pause: [{ type: 'native', fn: stack => {
+      timeVelocity = 0;
+    }}],
+    pad_x: [{ type: 'native', fn: stack => {
+      const whichPad = +stack.pop();
+      const u_name = `u_${uniform_seq++}`;
+      if (isNaN(whichPad)) {
       } else {
         tasks.push({
           type: 'set_uniform',
           name: u_name,
           valueType: 'float',
           get value() {
-            return globals.audioAnalyser.byteFreqData[bucketNumber]/255;
+            return pads[whichPad] && pads[whichPad].x
+          },
+        });
+      }
+      stack.push(u_name);
+    }}],
+    pad_y: [{ type: 'native', fn: stack => {
+      const whichPad = +stack.pop();
+      const u_name = `u_${uniform_seq++}`;
+      if (isNaN(whichPad)) {
+      } else {
+        tasks.push({
+          type: 'set_uniform',
+          name: u_name,
+          valueType: 'float',
+          get value() {
+            return pads[whichPad] && pads[whichPad].y;
+          },
+        });
+      }
+      stack.push(u_name);
+    }}],
+    pad: [{ type: 'native', fn: stack => {
+      const whichPad = +stack.pop();
+      const u_name = `u_${uniform_seq++}`;
+      if (isNaN(whichPad)) {
+      } else {
+        let interpVal = pads[whichPad] && pads[whichPad].pressed ? 1 : 0;
+        tasks.push({
+          type: 'set_uniform',
+          name: u_name,
+          valueType: 'float',
+          get value() {
+            const target = pads[whichPad] && pads[whichPad].pressed ? 1 : 0;
+            interpVal += (target - interpVal) * 0.1;
+            return interpVal;
           }
         });
       }
       stack.push(u_name);
+    }}],
+    '{': [{ type: 'native', fn: stack => {
+      defs = Object.create(defs);
+    }}],
+    '}': [{ type: 'native', fn: stack => {
+      defs = Object.getPrototypeOf(defs);
     }}],
   };
   const doOps = ops => {
     for (const op of ops) {
       if (op.type === 'define') {
         defs[op.name] = op.ops;
+      } else if (op.type === 'var') {
+        const { name, ops } = op;
+        if (!globals[name]) {
+          doOps(ops);
+          globals[name] = stack.pop();
+        }
+        defs[op.name] = [{ type: 'native', fn: stack => {
+          stack.push(globals[name]);
+        }}];
       } else if (op.type === 'operator') {
         stack.push(`(${[stack.pop(), op.value, stack.pop()].reverse().join(' ')})`);
       } else if (op.type === 'number') {
@@ -393,35 +518,35 @@ const compile = parseTree => {
     }
   };
   doOps(parseTree);
-  // console.log('complied to:', defs, stack, source);
   return tasks;
-  // ${source}`;
 }
 
-const updateFrag = () => {
-  const newParseTree = parse(ta.value);
-  // console.log(newParseTree);
+const updateFrag = value => {
+  const newParseTree = parse(value);
   const newTasks = compile(newParseTree);
 
-  let pendingUniforms = {
-    t: {
-      valueType: 'float',
-      get value() {
-        return t/1000;
-      }
-    },
-    aspect: {
-      valueType: 'float',
-      get value() {
-        return gl.drawingBufferWidth / gl.drawingBufferHeight;
-      }
-    },
-  };
-  let currentProg = null;
-
   const newRuntimeTasks = [];
+  let pendingUniforms;
   for (const task of newTasks) {
+    if (!pendingUniforms) {
+      pendingUniforms = {
+        t: {
+          valueType: 'float',
+          get value() {
+            return t/1000;
+          }
+        },
+        aspect: {
+          valueType: 'float',
+          get value() {
+            return gl.drawingBufferWidth / gl.drawingBufferHeight;
+          }
+        },
+      };
+    }
     if (task.type == 'draw') {
+      let currentProg = null;
+
       let defs = "";
       const uniforms = pendingUniforms;
       for (const k in uniforms) {
@@ -430,11 +555,10 @@ const updateFrag = () => {
           uniform ${u.valueType} ${k};
         `;
       }
-      pendingUniforms = {};
+      pendingUniforms = null;
 
       const prog = gl.createProgram();
       const shaderText = wrapFragShader(task.frag, defs);
-      console.log(shaderText);
       const fs = compileFragShader(shaderText);
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
@@ -452,7 +576,11 @@ const updateFrag = () => {
           const u = uniforms[k];
           const loc = gl.getUniformLocation(prog, k);
           const v = u.value;
-          gl.uniform1f(loc, u.value);
+          if (u.type === 'sampler2D') {
+            gl.uniform1i(loc, u.value);
+          } else {
+            gl.uniform1f(loc, u.value);
+          }
         }
 
         gl.enableVertexAttribArray(pLoc);
@@ -467,53 +595,6 @@ const updateFrag = () => {
     }
   }
   runtimeTasks = newRuntimeTasks;
-  return;
-
-  /*
-  const newProgram = gl.createProgram();
-  const newShaderText = preprocessFragShader(newShaderSource);
-  const fs = compileFragShader(wrapFragShader(newShaderText))
-  const fadeFsText = (oldFsSource !== null) && wrapFragShader(`
-    gl_FragColor = vec4(0.);
-    a();
-    vec4 aColor = gl_FragColor;
-    gl_FragColor = vec4(0.);
-    b();
-    vec4 bColor = gl_FragColor;
-    gl_FragColor = mix(aColor, bColor, easeInOutQuad(clamp(t - ${(tref-startTime)/1000}, 0., 1.)));
-    `, `
-    void a() {
-      ${oldFsSource}
-    }
-
-    void b() {
-      ${newShaderText}
-    }
-  `);
-  const fadeFs = fadeFsText ? compileFragShader(fadeFsText) : fs;
-
-  if (!fadeFs)
-    return;
-
-  if (fadeFs != fs) {
-    setTimeout(() => {
-      gl.detachShader(newProgram, fadeFs);
-      gl.attachShader(newProgram, fs);
-      gl.linkProgram(newProgram);
-    }, 1000);
-  }
-  */
-  gl.attachShader(newProgram, vs);
-  gl.attachShader(newProgram, fadeFs);
-  gl.linkProgram(newProgram);
-  if (!gl.getProgramParameter(newProgram, gl.LINK_STATUS)) {
-    console.log(fadeFsText);
-    console.log(gl.getProgramInfoLog(newProgram));
-    return;
-  }
-  gl.useProgram(newProgram);
-  program = newProgram;
-  oldFsSource = newShaderText;
 }
 
 const resize = () => {
@@ -538,57 +619,152 @@ const getToken = text => {
     return { type: 'swizzle', text, components: text.substr(1) };
   if (/^=/.test(text))
     return { type: 'assign', text, name: text.substr(1) };
-  if (!/^[a-zA-Z]/.test(text))
+  if (!/^[a-zA-Z{}]/.test(text))
     return { type: 'operator', text, value: text };
   return { type: 'word', text, value: text };;
 };
 
-const transfer = () => {
-  underlay.innerHTML = "";
-  const bgEl = document.createElement('span');
-  bgEl.textContent = ta.value;
-  underlay.appendChild(bgEl);
+const initEditor = (rootEl, cb) => {
+  const ta = rootEl.querySelector('.ta');
+  const underlay = rootEl.querySelector('.underlay');
+  const overlay = rootEl.querySelector('.overlay');
+  const key = rootEl.dataset.doc;
 
-  overlay.innerHTML = "";
-  const chunks = parse(ta.value);
-  for (const chunk of chunks) {
-    const el = document.createElement('span');
-    el.textContent = chunk.text;
-    if (chunk.type === "number") {
-      el.classList.add('number');
+  const transfer = () => {
+    ta.style.height = `1px`;
+    ta.style.height = `${ta.scrollHeight}px`;
+    underlay.style.height = `${ta.scrollHeight}px`;
+    overlay.style.height = `${ta.scrollHeight}px`;
+
+    underlay.innerHTML = "";
+    for (const line of ta.value.split('\n')) {
+      if (line) {
+        const bgEl = document.createElement('span');
+        bgEl.textContent = line;
+        underlay.appendChild(bgEl);
+      }
+      underlay.appendChild(document.createTextNode('\n'));
     }
-      overlay.appendChild(el);
-  }
-  localStorage.prog = ta.value;
-}
 
-ta.addEventListener('keydown', e => {
-  if (e.keyCode == 13 && e.metaKey) {
-    e.preventDefault();
-    window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: ta.value }));
-    return;
+    overlay.innerHTML = "";
+    const chunks = parse(ta.value);
+    for (const chunk of chunks) {
+      const el = document.createElement('span');
+      el.textContent = chunk.text;
+      if (chunk.type === "number") {
+        el.classList.add('number');
+      }
+        overlay.appendChild(el);
+    }
+    localStorage[key] = ta.value;
   }
-});
 
-ta.addEventListener('input', e => {
+  ta.addEventListener('keydown', e => {
+    if (e.keyCode == 13 && e.metaKey) {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
+        name: key,
+        value: ta.value,
+      }}));
+      return;
+    }
+  });
+
+  ta.addEventListener('input', e => {
+    transfer();
+    try {
+      cb();
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  ta.value = localStorage[key];
   transfer();
-  updateFrag();
-  kickstart();
-});
+
+  return {
+    get name() { return key; },
+    get value(){ return ta.value; },
+    set value(v){ ta.value = v; this.poke(); },
+    poke() { transfer(); },
+  };
+};
+
+const editors = [];
+const onEditorChanged = () => {
+  try {
+    updateFrag(editors.map(e => e.value).join('\n'));
+    kickstart();
+  } catch (e) {
+    console.error(e);
+  }
+};
+for (const el of document.querySelectorAll('.editor'))
+  editors.push(initEditor(el, onEditorChanged));
+onEditorChanged();
+
+const initTabs = (rootEl, tabChanged) => {
+  const updateVisibility = () => {
+    for (const tabEl of rootEl.children) {
+      const targetEl = document.querySelector(`[data-tab=${tabEl.textContent}`);
+      if ('selected' in tabEl.dataset)
+        targetEl.dataset.tabSelected = '';
+      else
+        delete targetEl.dataset.tabSelected;
+    }
+  };
+  updateVisibility();
+  for (const tabEl of rootEl.children) {
+    const targetEl = document.querySelector(`[data-tab=${tabEl.textContent}`);
+    tabEl.addEventListener('mousedown', e => {
+      e.preventDefault();
+      if ('selected' in tabEl.dataset)
+        return;
+      const selectedTab = rootEl.querySelector('[data-selected]');
+      if (selectedTab)
+        delete selectedTab.dataset.selected;
+      tabEl.dataset.selected = '';
+      updateVisibility();
+      tabChanged();
+    });
+  }
+};
+const selectedTabChanged = () => {
+  for (const ed of editors)
+    ed.poke();
+};
+for (const el of document.querySelectorAll('.tabs'))
+  initTabs(el, selectedTabChanged);
+selectedTabChanged();
 
 if (prog) {
   document.body.classList.add('view');
   window.addEventListener('broadcast', e => {
-    ta.value = e.detail;
-    updateFrag();
+    for (const ed of editors) {
+      if (ed.name != e.detail.name)
+        continue;
+      ed.value = e.detail.value;
+    }
+    onEditorChanged();
   });
 }
 
-transfer();
-updateFrag();
+// transfer();
+// updateFrag();
+// kickstart();
 
-// const paramValues = () => {
-//   gl.getUniformLocation(program, "p_in");
-// }
+navigator.requestMIDIAccess && navigator.requestMIDIAccess({
+  sysex: false
+}).then(midi => {
+  const input = midi.inputs.values().next().value;
+  if (!input)
+    return;
+  input.onmidimessage = e => {
+    console.log(e.data);
+  };
+});
+
+if ("serviceWorker" in navigator)
+  navigator.serviceWorker.register("/sw.js");
 
 </script>
