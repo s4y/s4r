@@ -32,6 +32,10 @@ body {
   position: relative;
 }
 
+body.view {
+  cursor: none;
+}
+
 body.view #ed {
   display: none;
 }
@@ -109,7 +113,23 @@ body.view #ed {
 
 #toolbar {
   background: rgba(0, 0, 0, 0.3);
+  color: white;
   margin-bottom: 0.5em;
+  display: flex;
+}
+
+#toolbar > .left {
+  flex: 1;
+}
+
+#toolbar > .right {
+}
+
+.fullscreenButton {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
 }
 
 #toolbar .tabs {

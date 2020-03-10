@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <meta name=viewport content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel=stylesheet href=style.css>
 <style>
 
 html, body {
@@ -19,26 +20,12 @@ iframe {
   height: 100%;
 }
 
-#enableAudioContext {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  background: rgba(0, 0, 0, 0.8);
-  color: white;
-  text-align: center;
-  padding: 1em;
-}
-
-#enableAudioContext:not(.visible) {
-  display: none;
-}
 </style>
 <div id=enableAudioContext>Give me some web audio</div>
 <iframe src="/"></iframe>
 <script>
 
-const ac = new (window.AudioContext || window.webkitAudioContext)();
+const ac = window.ac = new (window.AudioContext || window.webkitAudioContext)();
 let source;
 const checkState = () => {
   if (ac.state === 'suspended') {
