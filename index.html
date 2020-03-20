@@ -345,6 +345,23 @@ const parse = s => {
               name,
               ops: line.slice(2),
             });
+          } else if (line[0].value === 'loop') {
+            const count = line[1].value;
+            const varType = line[2].value;
+            ops.push({
+              type: 'loop',
+              varType,
+              count,
+              ops: line.slice(2),
+            });
+          } else if (line[0].value === 'freeze') {
+            const varType = line[1].value;
+            const word = line[2].value;
+            ops.push({
+              type: 'freeze',
+              varType,
+              word,
+            });
           } else {
             throw new Error('bad directive');
           }
@@ -402,6 +419,8 @@ const handleAnimationFrame = () => {
 const compile = parseTree => {
   let uniform_seq = 0;
   let texture_seq = 0;
+  let var_seq = 0;
+  let preamble = '';
   let tasks = [];
   let stack = [];
   let defs = {
@@ -428,7 +447,7 @@ const compile = parseTree => {
     draw: [{ type: 'native', fn: stack => {
       tasks.push({
         type: 'draw',
-        frag: `gl_FragColor = ${stack.pop()};`,
+        frag: `${preamble}gl_FragColor = ${stack.pop()};`,
       });
     }}],
     drawto: [{ type: 'native', fn: (stack, tag) => {
@@ -436,7 +455,7 @@ const compile = parseTree => {
       tasks.push({
         type: 'draw',
         target,
-        frag: `gl_FragColor = ${stack.pop()};`,
+        frag: `${preamble}gl_FragColor = ${stack.pop()};`,
       });
     }}],
     tvel: [{ type: 'native', fn: stack => {
@@ -551,6 +570,22 @@ const compile = parseTree => {
     for (const op of ops) {
       if (op.type === 'define') {
         defs[op.name] = op.ops;
+      } else if (op.type === 'loop') {
+        const { count, varType, ops } = op;
+        const l_name = `l_${var_seq++}`;
+        const l_val = stack.pop();
+        stack.push(l_name);
+        doOps(ops);
+        const body = stack.pop();
+        preamble += `${varType} ${l_name} = ${l_val}; for (int i = 0; i < ${count}; i++) ${l_name} = ${body};\n`;
+        stack.push(l_name);
+      } else if (op.type === 'freeze') {
+        const var_name = `l_${var_seq++}`;
+        doOps(defs[op.word]);
+        preamble += `${op.varType} ${var_name} = ${stack.pop()};\n`;
+        defs[op.word] = [{ type: 'native', fn: stack => {
+          stack.push(var_name);
+        }}];
       } else if (op.type === 'var') {
         const { name, ops } = op;
         if (!globals[name]) {
