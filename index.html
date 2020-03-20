@@ -451,7 +451,7 @@ const compile = parseTree => {
         globals.audioAnalyser = createAudioAnalyser();
       const {audioAnalyser} = globals;
       const bucketStr = stack.pop();
-      const bucketNumber = Math.floor(Math.pow(+bucketStr, 2) * audioAnalyser.byteFreqData.length);
+      const bucketNumber = Math.floor(+bucketStr * audioAnalyser.byteFreqData.length);
       if (isNaN(bucketNumber)) {
         const textureID = texture_seq++;
         if (!globals.framebuffers.sf) {
@@ -472,7 +472,7 @@ const compile = parseTree => {
             },
           }
         });
-        stack.push(`texture2D(u_freq, vec2(pow(${bucketStr}, 2.0), 0.0))[0]`);
+        stack.push(`texture2D(u_freq, vec2(${bucketStr}, 0.0))[0]`);
       } else {
         const u_name = `u_${uniform_seq++}`;
         tasks.push({
