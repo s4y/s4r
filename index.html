@@ -25,14 +25,14 @@
 <div id=enableAudioContext>Give me some web audio</div>
 <script>
 
-window.hqs = location.hash
+const hqs = location.hash
   .substr(1)
   .split('&')
   .filter(v => v)
   .map(c => c.split('=').map(decodeURIComponent))
   .reduce((params, [k, v]) => (params[k] = v, params), {});
 
-const prog = 'id' in window.hqs;
+const prog = 'id' in hqs;
 
 const pads = {};
 window.addEventListener('broadcast', e => {
@@ -46,7 +46,7 @@ window.addEventListener('broadcast', e => {
 const gl = c.getContext('webgl', {
   alpha: false,
   antialias: false,
-  powerPreference: prog ? 'high-performance' : 'low-power',
+  powerPreference: 'high-performance', // prog ? 'high-performance' : 'low-power',
 });
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -110,7 +110,7 @@ const createAudioAnalyser = () => {
     checkState();
 
     const analyser = ac.createAnalyser();
-    analyser.smoothingTimeConstant = 0.2;
+    analyser.smoothingTimeConstant = 0.3;
     ac.resume();
     return analyser;
   })();
@@ -131,8 +131,8 @@ const createAudioAnalyser = () => {
   const getByteFreqData = updateable(new Uint8Array(Math.floor(kMaxFrequency / window.top.ac.sampleRate * (analyser.fftSize / 2))), data => {
     analyser.getByteFrequencyData(data);
   });
-  const getByteTimeData = updateable(new Uint8Array(1024), data => {
-    analyser.getByteTimeData(data);
+  const getByteTimeData = updateable(new Uint8Array(2048), data => {
+    analyser.getByteTimeDomainData(data);
   });
 
   return {
