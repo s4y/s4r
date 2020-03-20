@@ -465,6 +465,46 @@ const compile = parseTree => {
       timeVelocity = newTimeVelocity;
       kickstart();
     }}],
+    st: [{ type: 'native', fn: stack => {
+      if (!globals.audioAnalyser)
+        globals.audioAnalyser = createAudioAnalyser();
+      const {audioAnalyser} = globals;
+      const bucketStr = stack.pop();
+      const bucketNumber = Math.floor(Math.pow(+bucketStr, 2) * audioAnalyser.byteTimeData.length);
+      if (isNaN(bucketNumber)) {
+        const textureID = texture_seq++;
+        if (!globals.framebuffers.st) {
+          globals.framebuffers.st = createFB(audioAnalyser.byteTimeData.length, 1);
+        }
+        tasks.push({
+          type: 'set_uniform',
+          name: 'u_audio_time',
+          valueType: 'sampler2D',
+          value: {
+            tex: globals.framebuffers.st.tex,
+            draw() {
+              gl.texImage2D(
+                gl.TEXTURE_2D, 0, gl.LUMINANCE,
+                audioAnalyser.byteTimeData.length, 1, 0,
+                gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteTimeData
+              );
+            },
+          }
+        });
+        stack.push(`texture2D(u_audio_time, vec2(pow(${bucketStr}, 2.0), 0.0))[0]`);
+      } else {
+        const u_name = `u_${uniform_seq++}`;
+        tasks.push({
+          type: 'set_uniform',
+          name: u_name,
+          valueType: 'float',
+          get value() {
+            return audioAnalyser.byteTimeData[bucketNumber]/255;
+          }
+        });
+        stack.push(u_name);
+      }
+    }}],
     sf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
