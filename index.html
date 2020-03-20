@@ -316,6 +316,8 @@ const parse = s => {
       else
         continue;
     }
+    if (tok.type === 'bail')
+      break;
     if (tok.type === 'whitespace') {
       if (tok.breaksLine && (!inDirective || /\n$/.test(tok.text))) {
         if (line.length && line[0].type == 'directive') {
@@ -699,8 +701,8 @@ const getToken = text => {
   if (/\s+/.test(text))
     return { type: 'whitespace', breaksLine: text.indexOf('\n') != -1, tag, text };
   const numberValue = +text;
-  if (/^'/.test(text))
-    return { type: 'atom', tag, text, value: text.substr(1) };
+  if (/^bail\b/.test(text))
+    return { type: 'bail', tag };
   if (!isNaN(numberValue))
     return { type: 'number', tag, value: numberValue };
   if (text[0] === ':')
