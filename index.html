@@ -230,6 +230,11 @@ const createFBPair = (w, h) => {
 
 const globals = {
   framebuffers: {},
+  midi: new Proxy({}, {
+    get(obj, k) {
+      return obj[k] || 0;
+    }
+  }),
 };
 
 const wrapFragShader = (body, defs) => `
@@ -427,6 +432,16 @@ const compile = parseTree => {
     t: [{ type: 'native', fn: stack => { stack.push("t"); }}],
     p: [{ type: 'native', fn: stack => { stack.push("p"); }}],
     aspect: [{ type: 'native', fn: stack => { stack.push("aspect"); }}],
+    midi: [{ type: 'native', fn: (stack, tag) => {
+      const u_name = `u_${uniform_seq++}`;
+      tasks.push({
+        type: 'set_uniform',
+        name: u_name,
+        valueType: 'float',
+        get value() { return globals.midi[tag]; },
+      });
+      stack.push(u_name);
+    }}],
     fb: [{ type: 'native', fn: (stack, tag) => {
       if (!globals.framebuffers[tag])
         globals.framebuffers[tag] = createFBPair();
@@ -930,15 +945,11 @@ if (prog) {
 // updateFrag();
 // kickstart();
 
-navigator.requestMIDIAccess && navigator.requestMIDIAccess({
-  sysex: false
-}).then(midi => {
-  const input = midi.inputs.values().next().value;
-  if (!input)
+window.addEventListener('broadcast', e => {
+  const {type, value} = e.detail;
+  if (type != 'midi')
     return;
-  input.onmidimessage = e => {
-    console.log(e.data);
-  };
+  Object.assign(globals.midi, value);
 });
 
 if ("serviceWorker" in navigator)
