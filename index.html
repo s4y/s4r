@@ -228,6 +228,36 @@ const createFBPair = (w, h) => {
   };
 };
 
+const glTypeFromBinaryOperationOnTypes = (l, r) => {
+  const lBase = l.replace(/\d/, '');
+  const rBase = r.replace(/\d/, '');
+  switch (lBase) {
+    case 'float':
+      switch (rBase) {
+        case 'float':
+          return l;
+        case 'vec':
+        case 'mat':
+          return r;
+      }
+      break;
+    case 'vec':
+      return l;
+    case 'mat':
+      switch (rBase) {
+        case 'float':
+          return l;
+        case 'vec':
+        case 'mat':
+          if (l == r)
+            return l;
+          break;
+      }
+      break;
+  }
+  throw new Error(`Unknown type pair for binary op: ${l}, ${r}`);
+}
+
 const globals = {
   framebuffers: {},
   midi: new Proxy({}, {
@@ -286,6 +316,7 @@ void main() {
 `);
 gl.compileShader(vs);
 
+let currentParseTree = [];
 let runtimeTasks = [];
 
 const draw = t => {
@@ -333,29 +364,30 @@ const parse = s => {
               ops: line.slice(2),
             });
           } else if (line[0].value === 'fn') {
+            if (line.length < 3)
+              throw new Error("`:fn` used with wrong number of arguments. Expected name, arity, and (optional) return type.");
             const name = line[1].value;
-            const glName = name.match(/^[^.]+/);
+            const glName = name.match(/^[^.]+/)[0];
             const arity = line[2].value;
+            const type = line[3] && line[3].value;
             ops.push({
               type: 'define',
               name,
               ops: [{ type: 'native', fn: stack => {
-                stack.push(`${glName}(${stack.splice(stack.length-arity, arity).join(', ')})`);
+                const args = stack.splice(stack.length-arity, arity);
+                stack.push({
+                  type: 'invocation',
+                  glName,
+                  dataType: type || args[0].dataType,
+                  const: args.reduce((acc, arg) => acc && arg.const, true),
+                  args,
+                });//`${glName}(${stack.splice(stack.length-arity, arity).join(', ')})`);
               }}],
-            });
-          } else if (line[0].value === 'var') {
-            const name = line[1].value;
-            ops.push({
-              type: 'var',
-              name,
-              ops: line.slice(2),
             });
           } else if (line[0].value === 'loop') {
             const count = line[1].value;
-            const varType = line[2].value;
             ops.push({
               type: 'loop',
-              varType,
               count,
               ops: line.slice(2),
             });
@@ -429,9 +461,24 @@ const compile = parseTree => {
   let tasks = [];
   let stack = [];
   let defs = {
-    t: [{ type: 'native', fn: stack => { stack.push("t"); }}],
-    p: [{ type: 'native', fn: stack => { stack.push("p"); }}],
-    aspect: [{ type: 'native', fn: stack => { stack.push("aspect"); }}],
+    t: [{ type: 'native', fn: stack => { stack.push({
+      type: 'symbol',
+      dataType: 'float',
+      const: false,
+      value: 't',
+    }); }}],
+    p: [{ type: 'native', fn: stack => { stack.push({
+      type: 'symbol',
+      dataType: 'vec3',
+      const: false,
+      value: 'p',
+    }); }}],
+    aspect: [{ type: 'native', fn: stack => { stack.push({
+      type: 'symbol',
+      dataType: 'float',
+      const: false,
+      value: 'aspect',
+    }); }}],
     midi: [{ type: 'native', fn: (stack, tag) => {
       const u_name = `u_${uniform_seq++}`;
       tasks.push({
@@ -440,7 +487,12 @@ const compile = parseTree => {
         valueType: 'float',
         get value() { return globals.midi[tag]; },
       });
-      stack.push(u_name);
+      stack.push({
+        type: 'symbol',
+        dataType: 'float',
+        const: false,
+        value: u_name,
+      });
     }}],
     fb: [{ type: 'native', fn: (stack, tag) => {
       if (!globals.framebuffers[tag])
@@ -452,26 +504,38 @@ const compile = parseTree => {
         valueType: 'sampler2D',
         value: globals.framebuffers[tag],
       });
-      stack.push(u_name);
+      stack.push({
+        type: 'symbol',
+        dataType: 'sampler2D',
+        const: false,
+        value: u_name,
+      });
     }}],
     // dims: [{ type: 'native', fn: stack => {
     //   stack.push(gl.drawingBufferWidth);
     //   stack.push(gl.drawingBufferHeight);
     // }}],
-    PI: [{ type: 'native', fn: stack => { stack.push("PI"); }}],
+    PI: [{ type: 'native', fn: stack => { stack.push({
+      type: 'symbol',
+      dataType: 'float',
+      const: true,
+      value: 'PI',
+    }); }}],
     draw: [{ type: 'native', fn: stack => {
       tasks.push({
         type: 'draw',
-        frag: `${preamble}gl_FragColor = ${stack.pop()};`,
+        frag: stack.pop(),
       });
+      preamble = '';
     }}],
     drawto: [{ type: 'native', fn: (stack, tag) => {
       const target = globals.framebuffers[tag] || (globals.framebuffers[tag] = createFBPair());
       tasks.push({
         type: 'draw',
         target,
-        frag: `${preamble}gl_FragColor = ${stack.pop()};`,
+        frag: stack.pop(),
       });
+      preamble = '';
     }}],
     tvel: [{ type: 'native', fn: stack => {
       const newTimeVelocity = +stack.pop();
@@ -484,13 +548,24 @@ const compile = parseTree => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
       const {audioAnalyser} = globals;
-      const bucketStr = stack.pop();
-      const bucketNumber = Math.floor(Math.pow(+bucketStr, 2) * audioAnalyser.byteTimeData.length);
-      if (isNaN(bucketNumber)) {
+      if (typeof stack[stack.length-1].value != 'number') {
         const textureID = texture_seq++;
-        if (!globals.framebuffers.st) {
+        if (!globals.framebuffers.st)
           globals.framebuffers.st = createFB(audioAnalyser.byteTimeData.length, 1);
-        }
+        tasks.push({
+          type: 'set_uniform',
+          name: 'u_audio_zero_crossing_time',
+          valueType: 'float',
+          get value() {
+            const {byteTimeData} = audioAnalyser;
+            for (let i = 0; i < byteTimeData.length; i++) {
+              if (i > 0 && byteTimeData[i-1] < 127 && byteTimeData[i] >= 127) {
+                return i / byteTimeData.length;
+              }
+            }
+            return 0;
+          },
+        });
         tasks.push({
           type: 'set_uniform',
           name: 'u_audio_time',
@@ -506,8 +581,11 @@ const compile = parseTree => {
             },
           }
         });
-        stack.push(`texture2D(u_audio_time, vec2(pow(${bucketStr}, 2.0), 0.0))[0]`);
+        stack.push({ type: "symbol", dataType: "float", const: false, value: 'u_audio_zero_crossing_time' });
+        doOps(parse(`+ 2 / 0 vec2 fb'st swap texture2D .x`));
       } else {
+        const bucket = stack.pop();
+        const bucketNumber = Math.floor(+bucket.value * audioAnalyser.byteTimeData.length);
         const u_name = `u_${uniform_seq++}`;
         tasks.push({
           type: 'set_uniform',
@@ -517,20 +595,17 @@ const compile = parseTree => {
             return audioAnalyser.byteTimeData[bucketNumber]/255;
           }
         });
-        stack.push(u_name);
+        stack.push({ type: "symbol", dataType: "float", const: false, value: u_name });
       }
     }}],
     sf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
       const {audioAnalyser} = globals;
-      const bucketStr = stack.pop();
-      const bucketNumber = Math.floor(+bucketStr * audioAnalyser.byteFreqData.length);
-      if (isNaN(bucketNumber)) {
+      if (typeof stack[stack.length-1].value != 'number') {
         const textureID = texture_seq++;
-        if (!globals.framebuffers.sf) {
+        if (!globals.framebuffers.sf)
           globals.framebuffers.sf = createFB(audioAnalyser.byteFreqData.length, 1);
-        }
         tasks.push({
           type: 'set_uniform',
           name: 'u_freq',
@@ -546,8 +621,10 @@ const compile = parseTree => {
             },
           }
         });
-        stack.push(`texture2D(u_freq, vec2(${bucketStr}, 0.0))[0]`);
+        doOps(parse(`0 vec2 fb'sf swap texture2D .x`));
       } else {
+        const bucket = stack.pop();
+        const bucketNumber = Math.floor(+bucket.value * audioAnalyser.byteFreqData.length);
         const u_name = `u_${uniform_seq++}`;
         tasks.push({
           type: 'set_uniform',
@@ -557,7 +634,7 @@ const compile = parseTree => {
             return audioAnalyser.byteFreqData[bucketNumber]/255;
           }
         });
-        stack.push(u_name);
+        stack.push({ type: "symbol", dataType: "float", const: false, value: u_name });
       }
     }}],
     pause: [{ type: 'native', fn: stack => {
@@ -626,37 +703,44 @@ const compile = parseTree => {
       if (op.type === 'define') {
         defs[op.name] = op.ops;
       } else if (op.type === 'loop') {
-        const { count, varType, ops } = op;
-        const l_name = `l_${var_seq++}`;
-        const l_val = stack.pop();
-        stack.push(l_name);
+        const { count, ops } = op;
+        // const l_name = `l_${var_seq++}`;
+        const initialValue = stack.pop();
+        stack.push({ type: "loopVar", dataType: initialValue.dataType, const: false, });
         doOps(ops);
         const body = stack.pop();
-        preamble += `${varType} ${l_name} = ${l_val}; for (int i = 0; i < ${count}; i++) ${l_name} = ${body};\n`;
-        stack.push(l_name);
+        // preamble += `${varType} ${l_name} = ${l_val}; for (int i = 0; i < ${count}; i++) ${l_name} = ${body};\n`;
+        stack.push({ type: "loop", dataType: initialValue.dataType, initialValue, count, body });
+        // stack.push({ type: "loop", dataType: l_val.dataType, value: l_name });
       } else if (op.type === 'freeze') {
-        const var_name = `l_${var_seq++}`;
-        doOps(defs[op.word]);
-        preamble += `${op.varType} ${var_name} = ${stack.pop()};\n`;
-        defs[op.word] = [{ type: 'native', fn: stack => {
-          stack.push(var_name);
-        }}];
-      } else if (op.type === 'var') {
-        const { name, ops } = op;
-        if (!globals[name]) {
-          doOps(ops);
-          globals[name] = stack.pop();
-        }
-        defs[op.name] = [{ type: 'native', fn: stack => {
-          stack.push(globals[name]);
-        }}];
+        // no-op
       } else if (op.type === 'operator') {
-        stack.push(`(${[stack.pop(), op.value, stack.pop()].reverse().join(' ')})`);
+        const right = stack.pop();
+        const left = stack.pop();
+        if (!left || !right)
+          throw new Error(`Null argument to operator: ${left} ${op.value} ${right}`);
+        if (!left.dataType || !right.dataType) {
+          throw new Error(`Something unexpected on the stack: ${JSON.stringify(left)}, ${JSON.stringify(right)}`);
+        }
+        const dataType = glTypeFromBinaryOperationOnTypes(left.dataType, right.dataType);
+        stack.push({
+          type: 'operator',
+          value: op.value,
+          dataType, left, right,
+          const: left.const && right.const,
+        });
+        // stack.push(`(${[stack.pop(), op.value, stack.pop()].reverse().join(' ')})`);
       } else if (op.type === 'number') {
-        let ns = op.value.toString();
-        if (ns.indexOf('.') === -1)
-          ns += '.';
-        stack.push(ns);
+        // let ns = op.value.toString();
+        // if (ns.indexOf('.') === -1)
+        //   ns += '.';
+        // stack.push(ns);
+        stack.push({
+          type: 'literal',
+          dataType: 'float',
+          const: true,
+          value: op.value,
+        });
       } else if (op.type === 'word') {
         const def = defs[op.value];
         if (def) {
@@ -667,7 +751,17 @@ const compile = parseTree => {
       } else if (op.type === 'native') {
         op.fn(stack, tag);
       } else if (op.type === 'swizzle') {
-        stack.push(`(${stack.pop()}).${op.components}`);
+        const components = op.components;
+        const value = stack.pop();
+        const dataType = components.length > 1 ? `vec${components.length}` : 'float';
+        stack.push({
+          type: 'swizzle',
+          dataType,
+          const: value.const,
+          components,
+          value,
+        });
+        // stack.push(`(${stack.pop()}).${op.components}`);
       } else if (op.type === 'assign') {
         const v = stack.pop();
         defs[op.name] = [{ type: 'native', fn: stack => { stack.push(v); }}];
@@ -680,8 +774,188 @@ const compile = parseTree => {
   return tasks;
 }
 
+const optimizeTree = (tree, depth) => {
+  const extracted = [];
+  const optimizedNodes = new Map();
+
+  const checkDupes = () => {
+    const dupes = {};
+    for (const expr of extracted) {
+      const j = JSON.stringify(expr);
+      if (j in dupes) {
+        console.log(extracted);
+        throw new Error(`Duplicate expr: ${j}`);
+      }
+      dupes[j] = true;
+    }
+  };
+
+  for (let i = 0; i < 100 /* max passes */; i++) {
+    const metadata = {};
+    // const metadataRefs = new Map();
+    const traverse = (node, depth) => {
+      if (node.type == 'reference')
+        return true;
+      if (node.type == 'literal')
+        return true;
+      if (node.type == 'symbol')
+        return true;
+      if (node.type == 'loopVar')
+        return false;
+      let json;
+      const meta = /* metadataRefs.get(node) || */ metadata[json = JSON.stringify(node)] || (metadata[json] = {
+        node, count: 0, bestDepth: depth, allowed: true,
+      });
+      // metadataRefs.set(node, meta);
+      meta.count += 1;
+      meta.bestDepth = Math.min(meta.bestDepth, depth);
+      for (const k in node) {
+        const v = node[k];
+        if (Array.isArray(v)) {
+          meta.allowed = v.reduce((allowed, node) => traverse(node, depth + 1) && allowed, meta.allowed);
+        } else if (typeof v == 'object') {
+          meta.allowed = traverse(v, depth + 1) && meta.allowed;
+        }
+      }
+      return meta.allowed;
+    };
+    for (const expr of extracted)
+      traverse(expr, 0);
+    traverse(tree, 0);
+    const minCountToOptimize = 2;
+    const optimizationCandidatesByDepth = [];
+    for (const k in metadata) {
+      const v = metadata[k];
+      if (v.count < minCountToOptimize)
+        continue;
+      if (!v.allowed)
+        continue;
+      const depthCandidates = optimizationCandidatesByDepth[v.bestDepth]
+        || (optimizationCandidatesByDepth[v.bestDepth] = []);
+      depthCandidates.push(v);
+    }
+
+    if (!optimizationCandidatesByDepth.length)
+      break;
+
+    for (const candidateList of optimizationCandidatesByDepth) {
+      if (!candidateList)
+        continue;
+      checkDupes();
+      for (const candidate of candidateList) {
+        optimizedNodes.set(candidate.node, {
+          type: "reference",
+          id: extracted.push(candidate.node) - 1,
+          const: candidate.node.const,
+        });
+      }
+      break;
+    }
+    const matchRef = v => {
+      const meta = /* metadataRefs.get(v) || */ metadata[JSON.stringify(v)];
+      return meta && optimizedNodes.get(meta.node);
+    };
+    const rebuildTree = node => {
+      const ret = {};
+      for (const k in node) {
+        const v = node[k];
+        if (Array.isArray(v)) {
+          ret[k] = v.map(v => matchRef(v) || rebuildTree(v));
+        } else if (typeof v == 'object') {
+          ret[k] = matchRef(v) || rebuildTree(v);
+        } else {
+          ret[k] = v;
+        }
+      }
+      return ret;
+    };
+    for (let i = 0; i < extracted.length; i++)
+      extracted[i] = rebuildTree(extracted[i]);
+    tree = rebuildTree(tree);
+  }
+  return { tree, extracted };
+}
+
+const toGLSource = tree => {
+  let decls = "";
+  let loop_seq = 0;
+  let loops = "";
+  let loop_stack = [];
+  let references = [];
+  let depsMet = {};
+  const serialize = node => {
+    switch(node.type) {
+      case "invocation":
+        return `${node.glName}(${node.args.map(serialize).join(', ')})`;
+        break;
+      case "operator":
+        return `(${serialize(node.left)} ${node.value} ${serialize(node.right)})`;
+      case "swizzle":
+        return `${serialize(node.value)}.${node.components}`;
+      case "literal":
+        let ns = node.value.toString();
+        if (ns.indexOf('.') === -1)
+          ns += '.';
+        return ns;
+      case "symbol":
+        return node.value;
+      case "reference":
+        if (!depsMet[node.id])
+          throw 'deps';
+        return references[node.id];
+      case "loopVar":
+        return loop_stack[loop_stack.length-1];
+      case "loop":
+        const loop_var = `l_${loop_seq++}`;
+        loop_stack.push(loop_var);
+        try {
+          loops += `${node.dataType} ${loop_var} = ${serialize(node.initialValue)}; for (int i = 0; i < ${node.count}; i++) ${loop_var} = ${serialize(node.body)};\n`;
+        } finally {
+          loop_stack.pop();
+        }
+        return loop_var;
+      default:
+        throw new Error(`Unknown AST node type: ${node.type}`);
+    }
+  };
+  const optimized = optimizeTree(tree);
+  for (let i = 0; i < optimized.extracted.length; i++) {
+    const name = `var_${i}`;
+    references.push(name);
+  }
+  for (;;) {
+    let didEmit = false;
+    for (let i = optimized.extracted.length - 1; i >= 0; i--) {
+      if (depsMet[i])
+        continue;
+      const expr = optimized.extracted[i];
+      try {
+        const nPre = `${expr.const ? "const " : ""}${expr.dataType} ${references[i]} = ${serialize(expr, depsMet)}; \n`;
+        decls += nPre;
+        depsMet[i] = true;
+        didEmit = true;
+      } catch (e) {
+        if (e === 'deps') {
+          continue;
+        }
+      }
+    }
+    if (!didEmit)
+      break;
+  }
+  const expr = serialize(optimized.tree);
+  return { preamble: decls + loops, expr, }
+};
+
 const updateFrag = value => {
-  const newParseTree = parse(value);
+  let newParseTree;
+  try {
+    newParseTree = parse(value);
+  } catch (e) {
+    console.error(e);
+    return;
+  }
+  // console.log(newParseTree);
   const newTasks = compile(newParseTree);
 
   const newRuntimeTasks = [];
@@ -717,8 +991,16 @@ const updateFrag = value => {
       }
       pendingUniforms = null;
 
+      console.log('transpiling:', task.frag);
+      const {preamble, expr: exprText} = toGLSource(task.frag);
+      const progText = `
+        ${preamble}
+        gl_FragColor = ${exprText};
+      `;
+      console.log('into:', progText);
+
       const prog = gl.createProgram();
-      const shaderText = wrapFragShader(task.frag, defs);
+      const shaderText = wrapFragShader(progText, defs);
       const fs = compileFragShader(shaderText);
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
@@ -782,28 +1064,28 @@ window.addEventListener('resize', resize);
 resize();
 
 const getToken = text => {
-  let tag = null;
+  let tok = {};
   if (/'.+/.test(text)) {
     const idx = text.indexOf("'");
-    tag = text.substr(idx + 1);
+    tok.tag = text.substr(idx + 1);
     text = text.substr(0, idx);
   }
   if (/\s+/.test(text))
-    return { type: 'whitespace', breaksLine: text.indexOf('\n') != -1, tag, text };
+    return Object.assign({ type: 'whitespace', breaksLine: text.indexOf('\n') != -1, text }, tok);
   const numberValue = +text;
   if (/^bail\b/.test(text))
-    return { type: 'bail', tag };
+    return Object.assign({ type: 'bail' }, tok);
   if (!isNaN(numberValue))
-    return { type: 'number', tag, value: numberValue };
+    return Object.assign({ type: 'number', value: numberValue }, tok);
   if (text[0] === ':')
-    return { type: 'directive', tag, text, value: text.substr(1) };
+    return Object.assign({ type: 'directive', value: text.substr(1) }, tok);
   if (/^\./.test(text))
-    return { type: 'swizzle', tag, text, components: text.substr(1) };
+    return Object.assign({ type: 'swizzle', components: text.substr(1) }, tok);
   if (/^=/.test(text))
-    return { type: 'assign', tag, text, name: text.substr(1) };
+    return Object.assign({ type: 'assign', name: text.substr(1) }, tok);
   if (!/^[a-zA-Z{}]/.test(text))
-    return { type: 'operator', text, value: text };
-  return { type: 'word', tag, text, value: text };;
+    return Object.assign({ type: 'operator', value: text }, tok);
+  return Object.assign({ type: 'word', value: text }, tok);;
 };
 
 const initEditor = (rootEl, cb) => {
@@ -829,15 +1111,18 @@ const initEditor = (rootEl, cb) => {
     }
 
     overlay.innerHTML = "";
-    const chunks = parse(ta.value);
-    for (const chunk of chunks) {
-      const el = document.createElement('span');
-      el.textContent = chunk.text;
-      if (chunk.type === "number") {
-        el.classList.add('number');
-      }
-        overlay.appendChild(el);
-    }
+    // const chunks = parse(ta.value);
+    // for (const chunk of chunks) {
+    //   const el = document.createElement('span');
+    //   el.textContent = chunk.text;
+    //   if (chunk.type === "number") {
+    //     el.classList.add('number');
+    //   }
+    //     overlay.appendChild(el);
+    // }
+    const el = document.createElement('span');
+    el.textContent = ta.value;
+    overlay.appendChild(el);
     localStorage[key] = ta.value;
   }
 
