@@ -112,6 +112,14 @@ const createAudioAnalyser = () => {
 
     const analyser = ac.createAnalyser();
     analyser.smoothingTimeConstant = 0.3;
+    try {
+      analyser.fftSize = 4096;
+      // analyser.fftSize = 2048;
+      // analyser.fftSize = 8192;
+      // analyser.fftSize = 16384;
+    } catch (e) {
+      console.log('fft maxed out at', analyser.fftSize);
+    }
     ac.resume();
     return analyser;
   })();
