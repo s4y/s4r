@@ -92,9 +92,10 @@ const createAudioAnalyser = () => {
         return;
       navigator.mediaDevices.getUserMedia({
         video: false,
-        audio: true,
-        noiseSuppression: false,
-        echoCancellation: false,
+        audio: {
+          noiseSuppression: false,
+          echoCancellation: false,
+        },
       })
       .then(s => {
         source = ac.createMediaStreamSource(s);
