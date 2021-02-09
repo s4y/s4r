@@ -271,9 +271,9 @@ const createAudioAnalyser = () => {
     const analyser = ac.createAnalyser();
     analyser.smoothingTimeConstant = 0.3;
     try {
-      analyser.fftSize = 4096;
       // analyser.fftSize = 2048;
-      // analyser.fftSize = 8192;
+      analyser.fftSize = 4096;
+      analyser.fftSize = 8192;
       // analyser.fftSize = 16384;
     } catch (e) {
       console.log('fft maxed out at', analyser.fftSize);
@@ -1285,7 +1285,6 @@ const updateFrag = value => {
       let currentProg = null;
 
       let defs = "";
-      let textures = [];
       const uniforms = pendingUniforms;
       for (const k in uniforms) {
         const u = uniforms[k];
@@ -1318,6 +1317,7 @@ const updateFrag = value => {
         gl.useProgram(prog);
         currentProg = prog;
 
+        let textures = [];
         for (const k in uniforms) {
           const u = uniforms[k];
           const loc = gl.getUniformLocation(prog, k);

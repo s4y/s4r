@@ -1,8 +1,16 @@
+// tag:viz
+
 const cache_name = "cache";
 const cache_urls = [
   "/",
   "/style.css",
 ];
+
+fetch(serviceWorker.scriptURL).then(async r => {
+  const firstLine = (await r.text()).split('\n')[0];
+  if (firstLine != '// tag:viz')
+    self.registration.unregister();
+});
 
 self.addEventListener("install", e => {
   e.waitUntil(
