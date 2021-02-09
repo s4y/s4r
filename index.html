@@ -32,7 +32,165 @@ const hqs = location.hash
   .map(c => c.split('=').map(decodeURIComponent))
   .reduce((params, [k, v]) => (params[k] = v, params), {});
 
+const setHqs = (k, v) => {
+  hqs[k] = v;
+  location.replace(`#${Object.keys(hqs).map(k => [k, hqs[k]].map(encodeURIComponent).join('=')).join('&')}`);
+};
+
 const prog = 'id' in hqs;
+
+const defaultProgs = {
+  common: `:fn sin 1
+:fn cos 1
+:fn acos 1
+:fn sqrt 1
+:fn exp 1
+:fn tan 1
+:fn sign 1
+:fn vec2.1 1 vec2
+:fn vec2 2 vec2
+:fn vec3 3 vec3
+:fn vec3.1 1 vec3
+:fn vec3.2 2 vec3
+:fn vec4.1 1 vec4
+:fn vec4.2 2 vec4
+:fn vec4.3 3 vec4
+:fn vec4 4 vec4
+:fn atan 2
+:fn pow 2
+:fn distance 2 float
+:fn dot 2 float
+:fn clamp 3
+:fn mod 2
+:fn abs 1
+:fn min 2
+:fn max 2
+:fn mix 3
+:fn step 2
+:fn mat2 4 mat2
+:fn mat3 9 mat3
+:fn mat4 16 mat4
+:fn length 1 float
+:fn texture2D 2 vec4
+:fn rgb2hsv 1
+:fn hsv2rgb 1
+:fn normalize 1
+
+:def x p .x
+:def y p .y
+
+1 0 0 0
+0 1 0 0
+0 0 1 0
+0 0 0 1
+mat4 =kIdentity
+
+
+:def rotX
+ { =angle
+  1 0 0 0
+  0 angle cos angle sin -1 * 0
+  0 angle sin angle cos 0
+  0 0 0 1
+ } mat4
+
+:def rotY
+ { =angle
+  angle cos 0 angle sin 0
+  0 1 0 0
+  angle sin -1 * 0 angle cos 0
+  0 0 0 1
+ } mat4
+
+:def rotYt
+ { =angle
+  angle cos 0 angle sin -1 * 0
+  0 1 0 0
+  angle sin 0 angle cos 0
+  0 0 0 1
+ } mat4
+
+:def rotZ
+ { =angle
+  angle cos angle sin -1 * 0 0
+  angle sin angle cos 0 0
+  0 0 1 0
+  0 0 0 1
+ } mat4
+
+:def perspectiveProj
+ { =far =near =aspect =fov
+  1 fov 2 / tan / =f
+  f aspect / 0 0 0
+  0 f 0 0
+  0 0 far near + far near - / 1
+  0 0 2 far * near * near far - / 0
+ } mat4
+
+:def transform swap 1 vec4.2 swap * dup .xyz swap .w /
+:def unbal 2. / .5 +
+:def bal 2. * 1 -
+:def cmod { =by by 2 / + by mod by 2 / - }
+:def uv p .xy unbal
+:def angle p .x p .y atan
+:def cdist 0 vec2.1 p .xy distance
+:def polar cdist 2 PI angle / / vec2
+:def fitp p aspect 1 1 vec3 * =p
+:def dup { =x x x }
+:def swap { =x =y x y }
+:def inv 1 swap -
+:def tex texture2D
+:def blend { =b =a a b a .a inv * + }
+:def addHsv { =delta =c c .rgb rgb2hsv delta + hsv2rgb c .a vec4.2 }
+:def hsv vec3 hsv2rgb 1 vec4.2
+
+:def smin { =k =b =a
+ 0.5 0.5 b a - * k / + 0 1 clamp =h
+ b a h mix k h 1 h - * * -
+ }
+
+:def sdSphere { =size =p
+ p length size -
+ }
+
+:def sdBox { =b =p
+ p abs b - =q
+ q 0 max length
+ q .x q .y q .z max max 0 min
+ -
+ }
+
+:def estimateNormal {
+ =p
+ 1 512 / =epsilon
+ p .x epsilon + p .y p .z vec3 sd
+ p .x epsilon - p .y p .z vec3 sd -
+ p .x p .y epsilon + p .z vec3 sd
+ p .x p .y epsilon - p .z vec3 sd -
+ p .x p .y p .z epsilon + vec3 sd
+ p .x p .y p .z epsilon - vec3 sd -
+ vec3 normalize
+ }`,
+  proj: `:def sceneDistance
+  0 0 2 vec3 +
+  t rotX
+  t rotZ * transform
+  0.4 vec3.1
+  sdBox
+
+fitp
+
+0 0 -1 vec3 =direction
+
+:def marchOnce 0 0 -1 vec3 * p + sceneDistance
+
+0
+:loop 40
+ dup marchOnce 0 max +
+
+3 / 2 pow
+vec4.1 draw`,
+};
 
 const pads = {};
 window.addEventListener('broadcast', e => {
@@ -62,7 +220,6 @@ gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
 gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
 
 const vs = gl.createShader(gl.VERTEX_SHADER);
-let program;
 
 const defaultProgram = 
 `:def unbal 2 / .5 +
@@ -93,13 +250,14 @@ const createAudioAnalyser = () => {
       navigator.mediaDevices.getUserMedia({
         video: false,
         audio: {
-          noiseSuppression: false,
+          // noiseSuppression: false,
           echoCancellation: false,
         },
       })
       .then(s => {
         source = ac.createMediaStreamSource(s);
         source.connect(analyser);
+        // source.connect(ac.destination);
       });
 
     };
@@ -145,6 +303,7 @@ const createAudioAnalyser = () => {
   });
 
   return {
+    analyser,
     get byteFreqData() { return getByteFreqData(); },
     get byteTimeData() { return getByteTimeData(); },
   };
@@ -223,8 +382,8 @@ const createFB = (w, h) => {
 const createFBPair = (w, h) => {
   const fbs = [createFB(w, h), createFB(w, h)];
   return {
-    w,
-    h, 
+    w: fbs[0].w,
+    h: fbs[0].h, 
     get tex() {
       return fbs[0].tex;
     },
@@ -305,6 +464,61 @@ vec3 hsv2rgb(vec3 c)
     vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
+
+mat4 inverse(mat4 m) {
+  float
+      a00 = m[0][0], a01 = m[0][1], a02 = m[0][2], a03 = m[0][3],
+      a10 = m[1][0], a11 = m[1][1], a12 = m[1][2], a13 = m[1][3],
+      a20 = m[2][0], a21 = m[2][1], a22 = m[2][2], a23 = m[2][3],
+      a30 = m[3][0], a31 = m[3][1], a32 = m[3][2], a33 = m[3][3],
+
+      b00 = a00 * a11 - a01 * a10,
+      b01 = a00 * a12 - a02 * a10,
+      b02 = a00 * a13 - a03 * a10,
+      b03 = a01 * a12 - a02 * a11,
+      b04 = a01 * a13 - a03 * a11,
+      b05 = a02 * a13 - a03 * a12,
+      b06 = a20 * a31 - a21 * a30,
+      b07 = a20 * a32 - a22 * a30,
+      b08 = a20 * a33 - a23 * a30,
+      b09 = a21 * a32 - a22 * a31,
+      b10 = a21 * a33 - a23 * a31,
+      b11 = a22 * a33 - a23 * a32,
+
+      det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+
+  return mat4(
+      a11 * b11 - a12 * b10 + a13 * b09,
+      a02 * b10 - a01 * b11 - a03 * b09,
+      a31 * b05 - a32 * b04 + a33 * b03,
+      a22 * b04 - a21 * b05 - a23 * b03,
+      a12 * b08 - a10 * b11 - a13 * b07,
+      a00 * b11 - a02 * b08 + a03 * b07,
+      a32 * b02 - a30 * b05 - a33 * b01,
+      a20 * b05 - a22 * b02 + a23 * b01,
+      a10 * b10 - a11 * b08 + a13 * b06,
+      a01 * b08 - a00 * b10 - a03 * b06,
+      a30 * b04 - a31 * b02 + a33 * b00,
+      a21 * b02 - a20 * b04 - a23 * b00,
+      a11 * b07 - a10 * b09 - a12 * b06,
+      a00 * b09 - a01 * b07 + a02 * b06,
+      a31 * b01 - a30 * b03 - a32 * b00,
+      a20 * b03 - a21 * b01 + a22 * b00) / det;
+}
+
+mat4 perspectiveProj(float fov, float aspect, float near, float far) {
+  float f = 1.0 / tan(fov/2.0);
+  return mat4(
+    f / aspect, 0.0, 0.0, 0.0,
+    0.0, f, 0.0, 0.0,
+    0.0, 0.0, (far + near) / (far - near), 1.0,
+    0.0, 0.0, (2.0 * far * near) / (near - far), 0.0
+  );
+}
+
+    // inv_proj_mat = inverse(perspectiveProj(
+    //   PI/2.0, aspect, 0.1, 10.0
+    // ));
 
 ${defs || ""}
 
@@ -413,6 +627,7 @@ const parse = s => {
             throw new Error('bad directive');
           }
         } else {
+          // throw new Error(`unknown token: ${JSON.stringify(line)}`);
           ops.push(...line);
         }
         line.length = 0;
@@ -505,9 +720,10 @@ const compile = parseTree => {
       });
     }}],
     fb: [{ type: 'native', fn: (stack, tag) => {
-      if (!globals.framebuffers[tag])
+      let fb = globals.framebuffers[tag];
+      if (!fb || fb.w != gl.drawingBufferWidth || fb.h != gl.drawingBufferHeight)
         globals.framebuffers[tag] = createFBPair();
-      const u_name = `u_${uniform_seq++}`;
+      const u_name = `fb_${tag}`;
       tasks.push({
         type: 'set_uniform',
         name: u_name,
@@ -521,10 +737,11 @@ const compile = parseTree => {
         value: u_name,
       });
     }}],
-    // dims: [{ type: 'native', fn: stack => {
-    //   stack.push(gl.drawingBufferWidth);
-    //   stack.push(gl.drawingBufferHeight);
-    // }}],
+    dims: [{ type: 'native', fn: stack => {
+      // stack.push(gl.drawingBufferWidth);
+      // stack.push(gl.drawingBufferHeight);
+      doOps(parse(`${gl.drawingBufferWidth} ${gl.drawingBufferHeight} vec2`));
+    }}],
     PI: [{ type: 'native', fn: stack => { stack.push({
       type: 'symbol',
       dataType: 'float',
@@ -553,6 +770,13 @@ const compile = parseTree => {
         return;
       timeVelocity = newTimeVelocity;
       kickstart();
+    }}],
+    fftsmooth: [{ type: 'native', fn: stack => {
+      const smooth = +stack.pop().value;
+      if (isNaN(smooth))
+        return;
+      if (globals.audioAnalyser)
+        globals.audioAnalyser.analyser.smoothingTimeConstant = smooth;
     }}],
     st: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser)
@@ -612,7 +836,7 @@ const compile = parseTree => {
       if (!globals.audioAnalyser)
         globals.audioAnalyser = createAudioAnalyser();
       const {audioAnalyser} = globals;
-      if (typeof stack[stack.length-1].value != 'number') {
+      if (true || typeof stack[stack.length-1].value != 'number') {
         const textureID = texture_seq++;
         if (!globals.framebuffers.sf)
           globals.framebuffers.sf = createFB(audioAnalyser.byteFreqData.length, 1);
@@ -631,7 +855,7 @@ const compile = parseTree => {
             },
           }
         });
-        doOps(parse(`0 vec2 fb'sf swap texture2D .x`));
+        doOps(parse(`2 pow 0 vec2 fb'sf swap texture2D .x`));
       } else {
         const bucket = stack.pop();
         const bucketNumber = Math.floor(+bucket.value * audioAnalyser.byteFreqData.length);
@@ -784,115 +1008,187 @@ const compile = parseTree => {
   return tasks;
 }
 
-const optimizeTree = (tree, depth) => {
-  const extracted = [];
-  const optimizedNodes = new Map();
+class ShittyJSONStringifier {
+  constructor() {
+    this.cache = new Map();
+  }
 
-  const checkDupes = () => {
-    const dupes = {};
-    for (const expr of extracted) {
-      const j = JSON.stringify(expr);
-      if (j in dupes) {
-        console.log(extracted);
-        throw new Error(`Duplicate expr: ${j}`);
-      }
-      dupes[j] = true;
+  stringifyImpl(obj) {
+    if (Array.isArray(obj)) {
+      return `[${obj.map(obj => this.stringify(obj)).join(',')}]`;
+    } else if (typeof obj == 'object') {
+      return `{${Object.keys(obj).map(k => `${JSON.stringify(k)}:${this.stringify(obj[k])}`).join(',')}`;
+    } else {
+      return JSON.stringify(obj);
     }
-  };
+  }
 
-  for (let i = 0; i < 100 /* max passes */; i++) {
-    const metadata = {};
-    // const metadataRefs = new Map();
-    const traverse = (node, depth) => {
-      if (node.type == 'reference')
-        return true;
-      if (node.type == 'literal')
-        return true;
-      if (node.type == 'symbol')
-        return true;
-      if (node.type == 'loopVar')
-        return false;
-      let json;
-      const meta = /* metadataRefs.get(node) || */ metadata[json = JSON.stringify(node)] || (metadata[json] = {
-        node, count: 0, bestDepth: depth, allowed: true,
-      });
-      // metadataRefs.set(node, meta);
-      meta.count += 1;
-      meta.bestDepth = Math.min(meta.bestDepth, depth);
+  stringify(obj) {
+    let c = this.cache.get(obj);
+    if (!c)
+      this.cache.set(obj, c = this.stringifyImpl(obj));
+    return c;
+  }
+}
+
+const optimizeTree = tree => {
+  const canonicalize = node => {
+    let stringifier = new ShittyJSONStringifier();
+    let loops = [];
+    const canonicalNodes = {};
+    let canonicalLoopVar;
+    const traverse = node => {
+      const k = stringifier.stringify(node);
+      if (node.type == 'loopVar') {
+        if (!loops.length)
+          throw new Error("loopVar outside of a loop?!?!?!");
+        return canonicalLoopVar || (canonicalLoopVar = node);
+      }
+      const canon = canonicalNodes[k];
+      if (canon)
+        return canon;
+      const ret = canonicalNodes[k] = {};
+      if (node.type == 'loop')
+        loops.push(node);
       for (const k in node) {
         const v = node[k];
         if (Array.isArray(v)) {
-          meta.allowed = v.reduce((allowed, node) => traverse(node, depth + 1) && allowed, meta.allowed);
+          ret[k] = v.map(traverse);
         } else if (typeof v == 'object') {
-          meta.allowed = traverse(v, depth + 1) && meta.allowed;
+          ret[k] = traverse(v);
+        } else {
+          ret[k] = v;
         }
       }
-      return meta.allowed;
+      if (node.type == 'loop')
+        canonicalLoopVar = null;
+      if (node.type == 'loop')
+        loops.pop();
+      return ret;
     };
-    for (const expr of extracted)
-      traverse(expr, 0);
-    traverse(tree, 0);
-    const minCountToOptimize = 2;
-    const optimizationCandidatesByDepth = [];
-    for (const k in metadata) {
-      const v = metadata[k];
-      if (v.count < minCountToOptimize)
-        continue;
-      if (!v.allowed)
-        continue;
-      const depthCandidates = optimizationCandidatesByDepth[v.bestDepth]
-        || (optimizationCandidatesByDepth[v.bestDepth] = []);
-      depthCandidates.push(v);
-    }
+    return traverse(node);
+  };
+  const canonicalTree = canonicalize(tree);
 
-    if (!optimizationCandidatesByDepth.length)
-      break;
+  const buildMetadata = node => {
+    const loopStack = [];
+    const metadata = new Map();
+    const traverse = (node, parent, parentMeta) => {
+      let taint = false;
+      if (node.type == 'literal')
+        return;
+      if (node.type == 'symbol')
+        return;
 
-    for (const candidateList of optimizationCandidatesByDepth) {
-      if (!candidateList)
-        continue;
-      checkDupes();
-      for (const candidate of candidateList) {
-        optimizedNodes.set(candidate.node, {
-          type: "reference",
-          id: extracted.push(candidate.node) - 1,
-          const: candidate.node.const,
+      let meta = metadata.get(node);
+      if (!meta) {
+        metadata.set(node, meta = {
+          parents: [],
+          children: [],
         });
+        if (node.type == 'loop') {
+          loopStack.push(node);
+        } else if (node.type == 'loopVar') {
+          meta.loop = loopStack[loopStack.length-1];
+          taint = true;
+        }
+        for (const k in node) {
+          const v = node[k];
+          if (Array.isArray(v)) {
+            for (const child of v) {
+              meta.children.push(child);
+              taint = traverse(child, node) || taint;
+            }
+          } else if (typeof v == 'object') {
+            meta.children.push(v);
+            taint = traverse(v, node) || taint;
+          }
+        }
+        if (node.type == 'loop')
+          loopStack.pop();
       }
-      break;
-    }
-    const matchRef = v => {
-      const meta = /* metadataRefs.get(v) || */ metadata[JSON.stringify(v)];
-      return meta && optimizedNodes.get(meta.node);
+      if (parent)
+        meta.parents.push(parent);
+      if (taint && node.type != 'loop')
+        meta.taint = true;
+      return meta.taint;
     };
-    const rebuildTree = node => {
+    traverse(node);
+    return metadata;
+  };
+  const metadata = buildMetadata(canonicalTree);
+
+  const optimize = tree => {
+    let extracted = [];
+    let visitedNodes = new Set();
+    let nextToVisit = [canonicalTree];
+    const visit = node => {
+      if (visitedNodes.has(node))
+        return;
+      visitedNodes.add(node);
+      const meta = metadata.get(node);
+      if (!meta)
+        return;
+      nextToVisit.splice(0, 0, ...meta.children);
+      // if (node.type == 'loopVar') {
+      //   meta.id = metadata.get(meta.loop).id;
+      // } else if (meta.taint) {
+      if (meta.taint) {
+      } else if (node.type == 'loop' || meta.parents.length >= 2) {
+        meta.id = extracted.push(node) - 1;
+      }
+    };
+
+    while (nextToVisit.length) {
+      let toVisit = nextToVisit;
+      nextToVisit = [];
+      for (const node of toVisit)
+        visit(node);
+    }
+    
+    return extracted;
+  };
+  const extracted = optimize(canonicalTree);
+
+  const rebuild = tree => {
+    const traverse = (node, skip) => {
+      const meta = metadata.get(node);
+      if (!meta)
+        return node;
+      if (!skip && meta.id !== undefined) {
+        return {
+          type: "reference",
+          id: meta.id,
+          const: node.const,
+          selfref: meta.loop !== undefined,
+        };
+      }
       const ret = {};
       for (const k in node) {
         const v = node[k];
         if (Array.isArray(v)) {
-          ret[k] = v.map(v => matchRef(v) || rebuildTree(v));
+          ret[k] = v.map(v => traverse(v));
         } else if (typeof v == 'object') {
-          ret[k] = matchRef(v) || rebuildTree(v);
+          ret[k] = traverse(v);
         } else {
           ret[k] = v;
         }
       }
       return ret;
     };
-    for (let i = 0; i < extracted.length; i++)
-      extracted[i] = rebuildTree(extracted[i]);
-    tree = rebuildTree(tree);
-  }
-  return { tree, extracted };
+    return traverse(tree, true);
+  };
+
+  return { extracted: extracted.map(rebuild), tree: rebuild(canonicalTree) };
 }
 
 const toGLSource = tree => {
   let decls = "";
-  let loop_seq = 0;
-  let loops = "";
   let loop_stack = [];
+  let cur_loop = null;
   let references = [];
   let depsMet = {};
+  let depFail = false;
   const serialize = node => {
     switch(node.type) {
       case "invocation":
@@ -911,19 +1207,20 @@ const toGLSource = tree => {
         return node.value;
       case "reference":
         if (!depsMet[node.id])
-          throw 'deps';
+          depFail = true;
         return references[node.id];
       case "loopVar":
-        return loop_stack[loop_stack.length-1];
+        if (cur_loop === null)
+          throw new Error('tried to loopVar outside a loop');
+        return references[loop_stack[loop_stack.length-1]];
       case "loop":
-        const loop_var = `l_${loop_seq++}`;
-        loop_stack.push(loop_var);
+        const loop_var = references[loop_stack[loop_stack.length-1]];
+        cur_loop = loop_stack[loop_stack.length-1];
         try {
-          loops += `${node.dataType} ${loop_var} = ${serialize(node.initialValue)}; for (int i = 0; i < ${node.count}; i++) ${loop_var} = ${serialize(node.body)};\n`;
+          return `${serialize(node.initialValue)}; for (int i = 0; i < ${node.count}; i++) ${loop_var} = ${serialize(node.body)};\n`;
         } finally {
-          loop_stack.pop();
+          cur_loop = null;
         }
-        return loop_var;
       default:
         throw new Error(`Unknown AST node type: ${node.type}`);
     }
@@ -939,33 +1236,30 @@ const toGLSource = tree => {
       if (depsMet[i])
         continue;
       const expr = optimized.extracted[i];
-      try {
-        const nPre = `${expr.const ? "const " : ""}${expr.dataType} ${references[i]} = ${serialize(expr, depsMet)}; \n`;
-        decls += nPre;
-        depsMet[i] = true;
-        didEmit = true;
-      } catch (e) {
-        if (e === 'deps') {
-          continue;
-        }
-      }
+      loop_stack.push(i);
+      depFail = false;
+      const nPre = `${expr.const ? "const " : ""}${expr.dataType} ${references[i]} = ${serialize(expr, depsMet)}; \n`;
+      loop_stack.pop();
+      if (depFail)
+        continue;
+      decls += nPre;
+      depsMet[i] = true;
+      didEmit = true;
     }
     if (!didEmit)
       break;
   }
+  for (let i = 0; i < optimized.extracted.length; i++) {
+    if (!depsMet[i])
+      throw new Error("Failed to meet all deps.");
+  }
   const expr = serialize(optimized.tree);
-  return { preamble: decls + loops, expr, }
+  return { preamble: decls, expr, }
 };
 
 const updateFrag = value => {
   let newParseTree;
-  try {
-    newParseTree = parse(value);
-  } catch (e) {
-    console.error(e);
-    return;
-  }
-  // console.log(newParseTree);
+  newParseTree = parse(value);
   const newTasks = compile(newParseTree);
 
   const newRuntimeTasks = [];
@@ -1001,17 +1295,17 @@ const updateFrag = value => {
       }
       pendingUniforms = null;
 
-      console.log('transpiling:', task.frag);
       const {preamble, expr: exprText} = toGLSource(task.frag);
       const progText = `
         ${preamble}
         gl_FragColor = ${exprText};
       `;
-      console.log('into:', progText);
+      // console.log('source:', progText);
 
       const prog = gl.createProgram();
       const shaderText = wrapFragShader(progText, defs);
       const fs = compileFragShader(shaderText);
+      // console.log(shaderText);
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
@@ -1060,7 +1354,10 @@ const updateFrag = value => {
       };
     }
   }
-  runtimeTasks = newRuntimeTasks;
+  currentParseTree = newParseTree;
+  setTimeout(() => {
+    runtimeTasks = newRuntimeTasks;
+  }, 100);
 }
 
 const resize = () => {
@@ -1133,30 +1430,38 @@ const initEditor = (rootEl, cb) => {
     const el = document.createElement('span');
     el.textContent = ta.value;
     overlay.appendChild(el);
-    localStorage[key] = ta.value;
+    if (key !== 'common') {
+      localStorage[key] = ta.value;
+      setHqs(key, ta.value);
+    }
   }
+
+  const dump = () => {
+    window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
+      name: key,
+      value: ta.value,
+    }}));
+  };
+
+  document.getElementById('dump').addEventListener('click', dump);
 
   ta.addEventListener('keydown', e => {
     if (e.keyCode == 13 && e.metaKey) {
       e.preventDefault();
-      window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
-        name: key,
-        value: ta.value,
-      }}));
+      dump();
       return;
     }
   });
 
   ta.addEventListener('input', e => {
     transfer();
-    try {
-      cb();
-    } catch (e) {
-      console.error(e);
-    }
+    cb();
   });
 
-  ta.value = localStorage[key];
+  if (key == 'common')
+    ta.value = defaultProgs[key] || '';
+  else
+    ta.value = hqs[key] || localStorage[key] || defaultProgs[key] || '';
   transfer();
 
   return {
@@ -1171,10 +1476,10 @@ const editors = [];
 const onEditorChanged = () => {
   try {
     updateFrag(editors.map(e => e.value).join('\n'));
-    kickstart();
-  } catch (e) {
+  } catch(e) {
     console.error(e);
   }
+  kickstart();
 };
 for (const el of document.querySelectorAll('.editor'))
   editors.push(initEditor(el, onEditorChanged));
@@ -1244,6 +1549,10 @@ window.addEventListener('broadcast', e => {
   const {type, value} = e.detail;
   if (type != 'midi')
     return;
+  for (const k in value) {
+    if(globals.midi[k] != value[k])
+        console.log('midibutt', k, value[k]);
+  }
   Object.assign(globals.midi, value);
 });
 
