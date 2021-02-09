@@ -75,6 +75,7 @@ const defaultProgs = {
 :fn rgb2hsv 1
 :fn hsv2rgb 1
 :fn normalize 1
+:fn sdBoundingBox 3 float
 
 :def x p .x
 :def y p .y
@@ -514,6 +515,17 @@ mat4 perspectiveProj(float fov, float aspect, float near, float far) {
     0.0, 0.0, (far + near) / (far - near), 1.0,
     0.0, 0.0, (2.0 * far * near) / (near - far), 0.0
   );
+}
+
+// https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
+float sdBoundingBox( vec3 p, vec3 b, float e )
+{
+       p = abs(p  )-b;
+  vec3 q = abs(p+e)-e;
+  return min(min(
+      length(max(vec3(p.x,q.y,q.z),0.0))+min(max(p.x,max(q.y,q.z)),0.0),
+      length(max(vec3(q.x,p.y,q.z),0.0))+min(max(q.x,max(p.y,q.z)),0.0)),
+      length(max(vec3(q.x,q.y,p.z),0.0))+min(max(q.x,max(q.y,p.z)),0.0));
 }
 
     // inv_proj_mat = inverse(perspectiveProj(
