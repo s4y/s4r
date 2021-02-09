@@ -1448,23 +1448,6 @@ const initEditor = (rootEl, cb) => {
     }
   }
 
-  const dump = () => {
-    window.dispatchEvent(new CustomEvent('sendbroadcast', { detail: {
-      name: key,
-      value: ta.value,
-    }}));
-  };
-
-  document.getElementById('dump').addEventListener('click', dump);
-
-  ta.addEventListener('keydown', e => {
-    if (e.keyCode == 13 && e.metaKey) {
-      e.preventDefault();
-      dump();
-      return;
-    }
-  });
-
   ta.addEventListener('input', e => {
     transfer();
     cb();
