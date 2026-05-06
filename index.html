@@ -127,48 +127,44 @@ const handleAnimationFrame = () => {
 };
 
 const createAudioAnalyser = () => {
+  const makeAnalyser = (ac, smoothing, fftSize) => {
+    const a = ac.createAnalyser();
+    a.smoothingTimeConstant = smoothing;
+    try { a.fftSize = fftSize; } catch (e) {}
+    return a;
+  };
+
   const analyser = window.top.audioAnalyser || (() => {
     const ac = window.ac = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = makeAnalyser(ac, 0.87, 4096);
+    ac.fastAnalyser = makeAnalyser(ac, 0.0, 2048);
+    ac.slowAnalyser = makeAnalyser(ac, 0.94, 8192);
     let source;
     const checkState = () => {
       if (ac.state === 'suspended') {
         enableAudioContext.classList.add('visible');
         return;
       }
-
       enableAudioContext.classList.remove('visible');
-
-      if (source)
-        return;
-      navigator.mediaDevices.getUserMedia({
-        video: false,
-        audio: {
-          echoCancellation: false,
-        },
-      })
-      .then(s => {
-        source = ac.createMediaStreamSource(s);
-        source.connect(analyser);
-      });
+      if (source) return;
+      navigator.mediaDevices.getUserMedia({ video: false, audio: { echoCancellation: false } })
+        .then(s => {
+          source = ac.createMediaStreamSource(s);
+          source.connect(analyser);
+          source.connect(ac.fastAnalyser);
+          source.connect(ac.slowAnalyser);
+        });
     };
-    enableAudioContext.addEventListener('click', e => {
-      ac.resume();
-    });
-
+    enableAudioContext.addEventListener('click', e => { ac.resume(); });
     ac.addEventListener('statechange', checkState);
     checkState();
-
-    const analyser = ac.createAnalyser();
-    analyser.smoothingTimeConstant = 0.3;
-    try {
-      analyser.fftSize = 4096;
-      analyser.fftSize = 8192;
-    } catch (e) {
-      console.log('fft maxed out at', analyser.fftSize);
-    }
     ac.resume();
     return analyser;
   })();
+
+  const ac = window.top.ac;
+  const fastAnalyser = ac.fastAnalyser || analyser;
+  const slowAnalyser = ac.slowAnalyser || analyser;
 
   const updateable = (obj, update) => {
     let lastUpdateTime = 0;
@@ -183,8 +179,15 @@ const createAudioAnalyser = () => {
   };
 
   const kMaxFrequency = 20000;
-  const getByteFreqData = updateable(new Uint8Array(Math.floor(kMaxFrequency / window.top.ac.sampleRate * (analyser.fftSize / 2))), data => {
+  const freqBufSize = a => Math.floor(kMaxFrequency / ac.sampleRate * (a.fftSize / 2));
+  const getByteFreqData = updateable(new Uint8Array(freqBufSize(analyser)), data => {
     analyser.getByteFrequencyData(data);
+  });
+  const getByteFreqDataFast = updateable(new Uint8Array(freqBufSize(fastAnalyser)), data => {
+    fastAnalyser.getByteFrequencyData(data);
+  });
+  const getByteFreqDataSlow = updateable(new Uint8Array(freqBufSize(slowAnalyser)), data => {
+    slowAnalyser.getByteFrequencyData(data);
   });
   const getByteTimeData = updateable(new Uint8Array(2048), data => {
     analyser.getByteTimeDomainData(data);
@@ -193,6 +196,8 @@ const createAudioAnalyser = () => {
   return {
     analyser,
     get byteFreqData() { return getByteFreqData(); },
+    get byteFreqDataFast() { return getByteFreqDataFast(); },
+    get byteFreqDataSlow() { return getByteFreqDataSlow(); },
     get byteTimeData() { return getByteTimeData(); },
   };
 };

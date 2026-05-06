@@ -557,12 +557,6 @@ export const compile = (gl, parseTree, globals) => {
       globals.setTimeVelocity && globals.setTimeVelocity(v);
       globals.kickstart && globals.kickstart();
     }}],
-    fftsmooth: [{ type: 'native', fn: stack => {
-      const smooth = +stack.pop().value;
-      if (isNaN(smooth)) return;
-      if (globals.audioAnalyser)
-        globals.audioAnalyser.analyser.smoothingTimeConstant = smooth;
-    }}],
     st: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser && globals.createAudioAnalyser)
         globals.audioAnalyser = globals.createAudioAnalyser();
@@ -637,6 +631,54 @@ export const compile = (gl, parseTree, globals) => {
         } : null,
       });
       doOps(parse(`2 pow 0 vec2 fb'sf swap texture2D .x`));
+    }}],
+    fsf: [{ type: 'native', fn: stack => {
+      if (!globals.audioAnalyser && globals.createAudioAnalyser)
+        globals.audioAnalyser = globals.createAudioAnalyser();
+      const {audioAnalyser} = globals;
+      if (!audioAnalyser) return;
+      texture_seq++;
+      if (gl && !globals.framebuffers.fsf)
+        globals.framebuffers.fsf = createFB(gl, audioAnalyser.byteFreqDataFast.length, 1);
+      tasks.push({
+        type: 'set_uniform',
+        name: 'u_fast_freq',
+        valueType: 'sampler2D',
+        value: globals.framebuffers.fsf ? {
+          get tex() { return globals.framebuffers.fsf.tex; },
+          draw() {
+            if (!gl) return;
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
+              audioAnalyser.byteFreqDataFast.length, 1, 0,
+              gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteFreqDataFast);
+          },
+        } : null,
+      });
+      doOps(parse(`2 pow 0 vec2 fb'fsf swap texture2D .x`));
+    }}],
+    ssf: [{ type: 'native', fn: stack => {
+      if (!globals.audioAnalyser && globals.createAudioAnalyser)
+        globals.audioAnalyser = globals.createAudioAnalyser();
+      const {audioAnalyser} = globals;
+      if (!audioAnalyser) return;
+      texture_seq++;
+      if (gl && !globals.framebuffers.ssf)
+        globals.framebuffers.ssf = createFB(gl, audioAnalyser.byteFreqDataSlow.length, 1);
+      tasks.push({
+        type: 'set_uniform',
+        name: 'u_slow_freq',
+        valueType: 'sampler2D',
+        value: globals.framebuffers.ssf ? {
+          get tex() { return globals.framebuffers.ssf.tex; },
+          draw() {
+            if (!gl) return;
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
+              audioAnalyser.byteFreqDataSlow.length, 1, 0,
+              gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteFreqDataSlow);
+          },
+        } : null,
+      });
+      doOps(parse(`2 pow 0 vec2 fb'ssf swap texture2D .x`));
     }}],
     pause: [{ type: 'native', fn: stack => {
       globals.setTimeVelocity && globals.setTimeVelocity(0);
