@@ -27,6 +27,8 @@
 :fn max 2
 :fn mix 3
 :fn step 2
+:fn smoothstep 3
+:def ss { =b =a =x a b x smoothstep }
 :fn mat2 4 mat2
 :fn mat3 9 mat3
 :fn mat4 16 mat4
