@@ -1,0 +1,5 @@
+0
+:loop 10
+ dup 1 +
+
+vec4.1 draw

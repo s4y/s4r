@@ -1,0 +1,2 @@
+t dup * =tsq
+0 0 tsq 1 vec4 draw
