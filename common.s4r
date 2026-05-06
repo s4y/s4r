@@ -65,14 +65,6 @@ mat4 =kIdentity
   0 0 0 1
  } mat4
 
-:def rotYt
- { =angle
-  angle cos 0 angle sin -1 * 0
-  0 1 0 0
-  angle sin 0 angle cos 0
-  0 0 0 1
- } mat4
-
 :def rotZ
  { =angle
   angle cos angle sin -1 * 0 0
