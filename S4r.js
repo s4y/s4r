@@ -521,7 +521,7 @@ export const compile = (gl, parseTree, globals) => {
       stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
     }}],
     fb: [{ type: 'native', fn: (stack, tag) => {
-      if (gl && (!globals.framebuffers[tag] || globals.framebuffers[tag].w != gl.drawingBufferWidth || globals.framebuffers[tag].h != gl.drawingBufferHeight))
+      if (gl && !globals.framebuffers[tag])
         globals.framebuffers[tag] = createFBPair(gl);
       const u_name = `fb_${tag}`;
       tasks.push({
@@ -836,7 +836,6 @@ const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
         for (const k in uniforms) {
           const u = uniforms[k];
           const loc = gl.getUniformLocation(prog, k);
-          if (!loc) continue;
           const v = u.value;
           if (u.valueType === 'sampler2D') {
             const fb = v;
@@ -848,6 +847,8 @@ const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
             gl.bindTexture(gl.TEXTURE_2D, fb.tex);
             fb.draw && fb.draw();
             gl.uniform1i(loc, id);
+          } else if (!loc) {
+            continue;
           } else if (u.valueType === 'vec2') {
             gl.uniform2f(loc, ...v);
           } else if (u.valueType === 'mat4') {

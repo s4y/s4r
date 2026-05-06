@@ -164,7 +164,10 @@ body.view #ed {
 #errorZone {
   position: fixed;
   background: rgba(255, 0, 0, 0.5);
+  color: white;
+  padding: 0.25em;
   font-family: monospace;
+  font-size: 1.25em;
   left: 0;
   right: 0;
   bottom: 0;
