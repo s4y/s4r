@@ -315,7 +315,7 @@ const onEditorChanged = () => {
     showError(null);
   } else {
     clearTimeout(errorDebounce);
-    errorDebounce = setTimeout(() => showError(s4r.error), 0);
+    errorDebounce = setTimeout(() => showError(s4r.error), 200);
   }
   kickstart();
 };
