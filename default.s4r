@@ -1,0 +1,30 @@
+# s4r is a programming language for making live visuals
+# Newlines are the same as spaces*, so break up your code however you want!
+#
+# It uses a stack like this (it means "2"):
+#   1 1 +
+#
+# You can use the microphone by providing a frequency from 0-1:
+#   0.2 sf
+#
+# *except after lines that start with ":"
+
+fitp
+
+4 =changeThisNumber
+2 =thisOneToo
+0 =andThisOne
+
+0
+:loop 10 angle
+ cdist sin +
+ + changeThisNumber * sin changeThisNumber thisOneToo * /
+ cdist + PI * sin unbal
+ t 0.1 * +
+ PI 2 * * sin unbal
+=bri
+
+
+bri 0.2 + andThisOne bri hsv
+
+draw

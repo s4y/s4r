@@ -48,28 +48,9 @@ const setHqs = (k, v) => {
 
 const prog = 'id' in hqs;
 
-const defaultProgs = {
-  common: await fetch('common.s4r').then(r => r.text()).catch(() => ''),
-  proj: `:def sceneDistance
-  0 0 2 vec3 +
-  t rotX
-  t rotZ * transform
-  0.4 vec3.1
-  sdBox
-
-fitp
-
-0 0 -1 vec3 =direction
-
-:def marchOnce 0 0 -1 vec3 * p + sceneDistance
-
-0
-:loop 40
- dup marchOnce 0 max +
-
-3 / 2 pow
-vec4.1 draw`,
-};
+const defaultProgs = await Promise.all(['common.s4r', 'default.s4r']
+  .map(f => fetch(f).then(r => r.text())))
+  .then(([common, proj]) => ({ common, proj, }));
 
 const pads = {};
 window.addEventListener('broadcast', e => {
