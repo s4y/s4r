@@ -4,6 +4,9 @@ const cache_name = "cache";
 const cache_urls = [
   "/",
   "/style.css",
+  "/S4r.js",
+  "/common.s4r",
+  "/default.s4r",
 ];
 
 fetch(serviceWorker.scriptURL).then(async r => {
