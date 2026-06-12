@@ -508,8 +508,25 @@ export const compile = (gl, parseTree, globals) => {
     ...binaryOp('/'),
     ...symbol('t', 'float'),
     ...symbol('p', 'vec3'),
-    ...symbol('aspect', 'float'),
     ...symbol('PI', 'float', true),
+    aspect: [{ type: 'native', fn: (stack, tag) => {
+      if (!tag) {
+        stack.push({ type: 'symbol', dataType: 'float', const: false, value: 'aspect' });
+        return;
+      }
+      const u_name = `u_aspect_${tag}`;
+      tasks.push({
+        type: 'set_uniform',
+        name: u_name,
+        valueType: 'float',
+        get value() {
+          const fb = globals.framebuffers[tag];
+          if (!fb || !fb.h) return 1;
+          return fb.w / fb.h;
+        },
+      });
+      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
+    }}],
     midi: [{ type: 'native', fn: (stack, tag) => {
       const u_name = `u_${uniform_seq++}`;
       tasks.push({
