@@ -201,7 +201,7 @@ const makeWebcamTexture = () => {
     video.muted = true;
     video.playsInline = true;
     video.autoplay = true;
-    navigator.mediaDevices.getUserMedia({ video: { width: { max: 1920 }, height: { max: 1080 } } })
+    navigator.mediaDevices.getUserMedia({ video: hqs.videoDeviceId ? { deviceId: hqs.videoDeviceId } : { width: { max: 1920 }, height: { max: 1080 } } })
       .then(stream => {
         video.srcObject = stream;
         return video.play();
