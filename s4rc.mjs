@@ -48,14 +48,13 @@ try {
   }
 
   // Default: emit GLSL for the first draw task
-  let uniformDefs = '';
-  const pendingUniforms = { t: 'float', aspect: 'float' };
-
   for (const task of tasks) {
-    if (task.type === 'set_uniform') {
-      pendingUniforms[task.name] = task.valueType;
-    } else if (task.type === 'draw') {
-      for (const [name, type] of Object.entries(pendingUniforms))
+    if (task.type === 'draw') {
+      const uniformTypes = { t: 'float', aspect: 'float' };
+      for (const u of task.uniforms || [])
+        uniformTypes[u.name] = u.valueType;
+      let uniformDefs = '';
+      for (const [name, type] of Object.entries(uniformTypes))
         uniformDefs += `uniform ${type} ${name};\n`;
 
       const body = `${task.preamble}\ngl_FragColor = ${task.expr};`;
