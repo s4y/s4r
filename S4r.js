@@ -719,8 +719,11 @@ export const compile = (gl, parseTree, globals) => {
         for (const v of vars) stack.push(v);
         doOps(loopOps);
         const out = stack.slice();
-        if (out.length !== initials.length)
-          throw new Error(`loop body must leave the stack as deep as it found it (had ${initials.length}, left ${out.length})`);
+        if (out.length !== initials.length) {
+          const d = out.length - initials.length;
+          const n = Math.abs(d);
+          throw new Error(`loop body must leave the stack as deep as it found it; it left ${n} ${d > 0 ? 'more' : 'fewer'} ${n === 1 ? 'value' : 'values'} than it started with`);
+        }
         let p = 0;
         while (p < vars.length && out[p] === vars[p]) p++;
         const k = initials.length - p;
