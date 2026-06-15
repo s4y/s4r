@@ -416,6 +416,25 @@ export const toGLSource = tree => {
   return { preamble: decls, expr };
 };
 
+const collectUniforms = tree => {
+  const out = new Map();
+  const visit = node => {
+    if (!node || typeof node != 'object') return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (node.uniform)
+      out.set(node.uniform.name, node.uniform);
+    for (const k in node) {
+      if (k != 'uniform')
+        visit(node[k]);
+    }
+  };
+  visit(tree);
+  return [...out.values()];
+};
+
 // gl may be null for headless/CLI use — directives that allocate GPU resources are no-ops.
 const createFB = (gl, w, h) => {
   if (!gl) return { tex: null, fb: null, w: w||0, h: h||0, draw() {}, attach() {}, drawInto(f) { f(); } };
@@ -497,8 +516,29 @@ export const compile = (gl, parseTree, globals) => {
     }); }}],
   });
 
+  const uniformSymbol = (name, dataType, valueType, getValue) => ({
+    type: 'symbol',
+    dataType,
+    const: false,
+    value: name,
+    uniform: { name, valueType, get value() { return getValue(); } },
+  });
+
+  const audioTexture = (name, key, getData) => {
+    if (gl && !globals.framebuffers[key])
+      globals.framebuffers[key] = createFB(gl, getData().length, 1);
+    return uniformSymbol(name, 'sampler2D', 'sampler2D', () => globals.framebuffers[key] ? {
+      get tex() { return globals.framebuffers[key].tex; },
+      draw() {
+        if (!gl) return;
+        const data = getData();
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, data.length, 1, 0,
+          gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+      },
+    } : null);
+  };
+
   let uniform_seq = 0;
-  let texture_seq = 0;
   let tasks = [];
   let stack = [];
   let defs = {
@@ -515,58 +555,36 @@ export const compile = (gl, parseTree, globals) => {
         return;
       }
       const u_name = `u_aspect_${tag}`;
-      tasks.push({
-        type: 'set_uniform',
-        name: u_name,
-        valueType: 'float',
-        get value() {
-          const fb = globals.framebuffers[tag];
-          if (!fb || !fb.h) return 1;
-          return fb.w / fb.h;
-        },
-      });
-      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
+      stack.push(uniformSymbol(u_name, 'float', 'float', () => {
+        const fb = globals.framebuffers[tag];
+        if (!fb || !fb.h) return 1;
+        return fb.w / fb.h;
+      }));
     }}],
     midi: [{ type: 'native', fn: (stack, tag) => {
       const u_name = `u_${uniform_seq++}`;
-      tasks.push({
-        type: 'set_uniform',
-        name: u_name,
-        valueType: 'float',
-        get value() { return (globals.midi && globals.midi[tag]) || 0; },
-      });
-      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
+      stack.push(uniformSymbol(u_name, 'float', 'float',
+        () => (globals.midi && globals.midi[tag]) || 0));
     }}],
     fb: [{ type: 'native', fn: (stack, tag) => {
       if (gl && !globals.framebuffers[tag])
         globals.framebuffers[tag] = createFBPair(gl);
       const u_name = `fb_${tag}`;
-      tasks.push({
-        type: 'set_uniform',
-        name: u_name,
-        valueType: 'sampler2D',
-        value: globals.framebuffers[tag],
-      });
-      stack.push({ type: 'symbol', dataType: 'sampler2D', const: false, value: u_name });
+      stack.push(uniformSymbol(u_name, 'sampler2D', 'sampler2D',
+        () => globals.framebuffers[tag]));
     }}],
     dims: [{ type: 'native', fn: stack => {
-      const u_name = `u_dims`;
-      tasks.push({
-        type: 'set_uniform',
-        name: u_name,
-        valueType: 'vec2',
-        get value() {
-          return gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0];
-        },
-      });
-      stack.push({ type: 'symbol', dataType: 'vec2', const: false, value: u_name });
+      stack.push(uniformSymbol('u_dims', 'vec2', 'vec2',
+        () => gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0]));
     }}],
     draw: [{ type: 'native', fn: stack => {
-      tasks.push({ type: 'draw', frag: stack.pop() });
+      const frag = stack.pop();
+      tasks.push({ type: 'draw', frag, uniforms: collectUniforms(frag) });
     }}],
     drawto: [{ type: 'native', fn: (stack, tag) => {
       const target = globals.framebuffers[tag] || (globals.framebuffers[tag] = createFBPair(gl));
-      tasks.push({ type: 'draw', target, frag: stack.pop() });
+      const frag = stack.pop();
+      tasks.push({ type: 'draw', target, frag, uniforms: collectUniforms(frag) });
     }}],
     tvel: [{ type: 'native', fn: stack => {
       const v = +stack.pop().value;
@@ -580,49 +598,23 @@ export const compile = (gl, parseTree, globals) => {
       const {audioAnalyser} = globals;
       if (!audioAnalyser) return;
       if (typeof stack[stack.length-1].value != 'number') {
-        texture_seq++;
-        if (gl && !globals.framebuffers.st)
-          globals.framebuffers.st = createFB(gl, audioAnalyser.byteTimeData.length, 1);
-        tasks.push({
-          type: 'set_uniform',
-          name: 'u_audio_zero_crossing_time',
-          valueType: 'float',
-          get value() {
-            const {byteTimeData} = audioAnalyser;
-            for (let i = 1; i < byteTimeData.length; i++) {
-              if (byteTimeData[i-1] < 127 && byteTimeData[i] >= 127)
-                return i / byteTimeData.length;
-            }
-            return 0;
-          },
-        });
-        tasks.push({
-          type: 'set_uniform',
-          name: 'u_audio_time',
-          valueType: 'sampler2D',
-          value: globals.framebuffers.st ? {
-            get tex() { return globals.framebuffers.st.tex; },
-            draw() {
-              if (!gl) return;
-              gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
-                audioAnalyser.byteTimeData.length, 1, 0,
-                gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteTimeData);
-            },
-          } : null,
-        });
-        stack.push({ type: "symbol", dataType: "float", const: false, value: 'u_audio_zero_crossing_time' });
-        doOps(parse(`+ 2 / 0 vec2 fb'st swap texture2D .x`));
+        stack.push(uniformSymbol('u_audio_zero_crossing_time', 'float', 'float', () => {
+          const {byteTimeData} = audioAnalyser;
+          for (let i = 1; i < byteTimeData.length; i++) {
+            if (byteTimeData[i-1] < 127 && byteTimeData[i] >= 127)
+              return i / byteTimeData.length;
+          }
+          return 0;
+        }));
+        doOps(parse(`+ 2 / 0 vec2`));
+        stack.push(audioTexture('u_audio_time', 'st', () => audioAnalyser.byteTimeData));
+        doOps(parse(`swap texture2D .x`));
       } else {
         const bucket = stack.pop();
         const bucketNumber = Math.floor(+bucket.value * audioAnalyser.byteTimeData.length);
         const u_name = `u_${uniform_seq++}`;
-        tasks.push({
-          type: 'set_uniform',
-          name: u_name,
-          valueType: 'float',
-          get value() { return audioAnalyser.byteTimeData[bucketNumber]/255; }
-        });
-        stack.push({ type: "symbol", dataType: "float", const: false, value: u_name });
+        stack.push(uniformSymbol(u_name, 'float', 'float',
+          () => audioAnalyser.byteTimeData[bucketNumber]/255));
       }
     }}],
     sf: [{ type: 'native', fn: stack => {
@@ -630,72 +622,27 @@ export const compile = (gl, parseTree, globals) => {
         globals.audioAnalyser = globals.createAudioAnalyser();
       const {audioAnalyser} = globals;
       if (!audioAnalyser) return;
-      texture_seq++;
-      if (gl && !globals.framebuffers.sf)
-        globals.framebuffers.sf = createFB(gl, audioAnalyser.byteFreqData.length, 1);
-      tasks.push({
-        type: 'set_uniform',
-        name: 'u_freq',
-        valueType: 'sampler2D',
-        value: globals.framebuffers.sf ? {
-          get tex() { return globals.framebuffers.sf.tex; },
-          draw() {
-            if (!gl) return;
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
-              audioAnalyser.byteFreqData.length, 1, 0,
-              gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteFreqData);
-          },
-        } : null,
-      });
-      doOps(parse(`2 pow 0 vec2 fb'sf swap texture2D .x`));
+      doOps(parse(`2 pow 0 vec2`));
+      stack.push(audioTexture('u_freq', 'sf', () => audioAnalyser.byteFreqData));
+      doOps(parse(`swap texture2D .x`));
     }}],
     fsf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser && globals.createAudioAnalyser)
         globals.audioAnalyser = globals.createAudioAnalyser();
       const {audioAnalyser} = globals;
       if (!audioAnalyser) return;
-      texture_seq++;
-      if (gl && !globals.framebuffers.fsf)
-        globals.framebuffers.fsf = createFB(gl, audioAnalyser.byteFreqDataFast.length, 1);
-      tasks.push({
-        type: 'set_uniform',
-        name: 'u_fast_freq',
-        valueType: 'sampler2D',
-        value: globals.framebuffers.fsf ? {
-          get tex() { return globals.framebuffers.fsf.tex; },
-          draw() {
-            if (!gl) return;
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
-              audioAnalyser.byteFreqDataFast.length, 1, 0,
-              gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteFreqDataFast);
-          },
-        } : null,
-      });
-      doOps(parse(`2 pow 0 vec2 fb'fsf swap texture2D .x`));
+      doOps(parse(`2 pow 0 vec2`));
+      stack.push(audioTexture('u_fast_freq', 'fsf', () => audioAnalyser.byteFreqDataFast));
+      doOps(parse(`swap texture2D .x`));
     }}],
     ssf: [{ type: 'native', fn: stack => {
       if (!globals.audioAnalyser && globals.createAudioAnalyser)
         globals.audioAnalyser = globals.createAudioAnalyser();
       const {audioAnalyser} = globals;
       if (!audioAnalyser) return;
-      texture_seq++;
-      if (gl && !globals.framebuffers.ssf)
-        globals.framebuffers.ssf = createFB(gl, audioAnalyser.byteFreqDataSlow.length, 1);
-      tasks.push({
-        type: 'set_uniform',
-        name: 'u_slow_freq',
-        valueType: 'sampler2D',
-        value: globals.framebuffers.ssf ? {
-          get tex() { return globals.framebuffers.ssf.tex; },
-          draw() {
-            if (!gl) return;
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
-              audioAnalyser.byteFreqDataSlow.length, 1, 0,
-              gl.LUMINANCE, gl.UNSIGNED_BYTE, audioAnalyser.byteFreqDataSlow);
-          },
-        } : null,
-      });
-      doOps(parse(`2 pow 0 vec2 fb'ssf swap texture2D .x`));
+      doOps(parse(`2 pow 0 vec2`));
+      stack.push(audioTexture('u_slow_freq', 'ssf', () => audioAnalyser.byteFreqDataSlow));
+      doOps(parse(`swap texture2D .x`));
     }}],
     pause: [{ type: 'native', fn: stack => {
       globals.setTimeVelocity && globals.setTimeVelocity(0);
@@ -704,31 +651,33 @@ export const compile = (gl, parseTree, globals) => {
       const which = +stack.pop().value;
       const u_name = `u_${uniform_seq++}`;
       if (!isNaN(which))
-        tasks.push({ type: 'set_uniform', name: u_name, valueType: 'float',
-          get value() { return (globals.pads && globals.pads[which] && globals.pads[which].x) || 0; } });
-      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
+        stack.push(uniformSymbol(u_name, 'float', 'float',
+          () => (globals.pads && globals.pads[which] && globals.pads[which].x) || 0));
+      else
+        stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
     }}],
     pad_y: [{ type: 'native', fn: stack => {
       const which = +stack.pop().value;
       const u_name = `u_${uniform_seq++}`;
       if (!isNaN(which))
-        tasks.push({ type: 'set_uniform', name: u_name, valueType: 'float',
-          get value() { return (globals.pads && globals.pads[which] && globals.pads[which].y) || 0; } });
-      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
+        stack.push(uniformSymbol(u_name, 'float', 'float',
+          () => (globals.pads && globals.pads[which] && globals.pads[which].y) || 0));
+      else
+        stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
     }}],
     pad: [{ type: 'native', fn: stack => {
       const which = +stack.pop().value;
       const u_name = `u_${uniform_seq++}`;
       if (!isNaN(which)) {
         let interpVal = (globals.pads && globals.pads[which] && globals.pads[which].pressed) ? 1 : 0;
-        tasks.push({ type: 'set_uniform', name: u_name, valueType: 'float',
-          get value() {
-            const target = (globals.pads && globals.pads[which] && globals.pads[which].pressed) ? 1 : 0;
-            interpVal += (target - interpVal) * 0.1;
-            return interpVal;
-          } });
+        stack.push(uniformSymbol(u_name, 'float', 'float', () => {
+          const target = (globals.pads && globals.pads[which] && globals.pads[which].pressed) ? 1 : 0;
+          interpVal += (target - interpVal) * 0.1;
+          return interpVal;
+        }));
+      } else {
+        stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
       }
-      stack.push({ type: 'symbol', dataType: 'float', const: false, value: u_name });
     }}],
     '{': [{ type: 'native', fn: stack => { defs = Object.create(defs); }}],
     '}': [{ type: 'native', fn: stack => { defs = Object.getPrototypeOf(defs); }}],
@@ -839,26 +788,26 @@ const compileFragShader = (gl, s) => {
 
 const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
   const newRuntimeTasks = [];
-  let pendingUniforms;
 
-  const initUniforms = () => ({
-    t: {
-      valueType: 'float',
-      get value() { return globals.t || 0; }
-    },
-    aspect: {
-      valueType: 'float',
-      get value() { return gl.drawingBufferWidth / gl.drawingBufferHeight; }
-    },
-  });
+  const drawUniforms = task => {
+    const uniforms = {
+      t: {
+        valueType: 'float',
+        get value() { return globals.t || 0; }
+      },
+      aspect: {
+        valueType: 'float',
+        get value() { return gl.drawingBufferWidth / gl.drawingBufferHeight; }
+      },
+    };
+    for (const u of task.uniforms || [])
+      uniforms[u.name] = u;
+    return uniforms;
+  };
 
   for (const task of tasks) {
-    if (!pendingUniforms)
-      pendingUniforms = initUniforms();
-
     if (task.type == 'draw') {
-      const uniforms = pendingUniforms;
-      pendingUniforms = null;
+      const uniforms = drawUniforms(task);
 
       let uniformDefs = "";
       for (const k in uniforms) {
@@ -932,11 +881,6 @@ const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
         else
           doDraw();
       });
-    } else if (task.type === 'set_uniform') {
-      pendingUniforms[task.name] = {
-        valueType: task.valueType,
-        get value() { return task.value; }
-      };
     }
   }
   return newRuntimeTasks;
