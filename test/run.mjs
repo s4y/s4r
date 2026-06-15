@@ -10,11 +10,12 @@ import { readdirSync, readFileSync, existsSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { dirname, join, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { transform } from '../S4r.js';
+import { parse, compile, transform, toGLSource } from '../S4r.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const casesDir = join(__dir, 'cases');
 const s4rc = join(__dir, '..', 's4rc.mjs');
+const common = readFileSync(join(__dir, '..', 'common.s4r'), 'utf8') + '\n';
 
 const files = readdirSync(casesDir).filter(f => f.endsWith('.s4r')).sort();
 
@@ -37,7 +38,6 @@ const check = (name, fn) => {
   }
 };
 
-const common = readFileSync(join(__dir, '..', 'common.s4r'), 'utf8') + '\n';
 const compileDraws = src => transform(common + src).filter(t => t.type === 'draw');
 
 const assertUniformsResolve = (label, src) => {
@@ -48,6 +48,17 @@ const assertUniformsResolve = (label, src) => {
     if (missing.length)
       throw new Error(`${label}: draw #${i} references undeclared uniform(s): ${missing.join(', ')}`);
   });
+};
+
+const g = { framebuffers: {}, midi: {}, pads: {}, audioAnalyser: null, t: 0, kickstart() {}, setTimeVelocity() {} };
+const firstDraw = src => {
+  const task = compile(null, parse(common + src), g).find(t => t.type === 'draw');
+  return toGLSource(task.frag);
+};
+const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+const throws = (re, fn) => {
+  try { fn(); } catch (e) { assert(re.test(e.message), `wrong error: ${e.message}`); return; }
+  throw new Error('expected an error');
 };
 
 for (const file of files) {
@@ -94,7 +105,7 @@ const fbAcrossDraw = [
 const loopFeedbackAcrossDraw = [
   "fb'f uv tex .x =seed",
   "seed",
-  ":loop 4 dup cdist + sin",
+  ":loop 4 cdist + sin",
   "=acc",
   "acc drawto'f",
   "acc draw",
@@ -115,6 +126,36 @@ check('draw declares only the uniforms it uses', () => {
     throw new Error(`first draw should not declare fb_f; got ${names(0).join(', ') || '(none)'}`);
   if (!names(1).includes('fb_f'))
     throw new Error(`second draw should declare fb_f; got ${names(1).join(', ') || '(none)'}`);
+});
+
+check('single-value loop unchanged', () => {
+  const { preamble } = firstDraw("0\n:loop 5 1 +\nvec4.1 draw");
+  assert(/float var_0 = 0\.; for \(int i = 0; i < 5; i\+\+\) var_0 = \(var_0 \+ 1\.\);/.test(preamble), preamble);
+  assert(!/var_0_1/.test(preamble), `should not declare a 2nd accumulator: ${preamble}`);
+});
+
+check('two-value loop threads both accumulators', () => {
+  const { preamble, expr } = firstDraw("1 1\n:loop 8 =b =a b a b +\n+ vec4.1 draw");
+  assert(/float var_0 = 1\.; float var_0_1 = 1\.;/.test(preamble), preamble);
+  assert(/var_0 = var_0_n; var_0_1 = var_0_1_n;/.test(preamble), preamble);
+  assert(/\(var_0 \+ var_0_1\)/.test(expr), expr);
+});
+
+check('loop preserves context below accumulators', () => {
+  const { expr } = firstDraw("7 1 1\n:loop 3 =b =a b a b +\n+ + vec4.1 draw");
+  assert(/7\./.test(expr), `context value missing: ${expr}`);
+});
+
+check('unbalanced loop body is rejected (dup 1 +)', () => {
+  throws(/as deep as it found it/, () => firstDraw("0\n:loop 5 dup 1 +\nvec4.1 draw"));
+});
+
+check('loop body that consumes without replacing is rejected', () => {
+  throws(/as deep as it found it/, () => firstDraw("1\n:loop 3 =x\nvec4.1 draw"));
+});
+
+check('no-op loop body is rejected', () => {
+  throws(/update at least one value/, () => firstDraw("1\n:loop 3\n\nvec4.1 draw"));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

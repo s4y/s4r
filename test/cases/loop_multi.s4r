@@ -1,0 +1,4 @@
+# multi-value loop: thread (a, b) -> (b, a+b), i.e. Fibonacci
+1 1
+:loop 8 =b =a b a b +
+vec4.1 draw

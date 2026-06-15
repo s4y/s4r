@@ -341,11 +341,10 @@ const optimizeTree = tree => {
 
 export const toGLSource = tree => {
   let decls = "";
-  let loop_stack = [];
-  let cur_loop = null;
   let references = [];
   let depsMet = {};
   let depFail = false;
+  const varName = (id, slot) => `${references[id]}${slot ? '_' + slot : ''}`;
   const serialize = node => {
     switch(node.type) {
       case "invocation":
@@ -369,21 +368,28 @@ export const toGLSource = tree => {
           depFail = true;
         return references[node.id];
       case "loopVar":
-        if (cur_loop === null)
-          throw new Error('tried to loopVar outside a loop');
-        return references[loop_stack[loop_stack.length-1]];
-      case "loop": {
-        const loop_var = references[loop_stack[loop_stack.length-1]];
-        cur_loop = loop_stack[loop_stack.length-1];
-        try {
-          return `${serialize(node.initialValue)}; for (int i = 0; i < ${node.count}; i++) ${loop_var} = ${serialize(node.body)};\n`;
-        } finally {
-          cur_loop = null;
-        }
-      }
+        return varName(node.loop.id, node.slot);
+      case "loopResult":
+        if (!depsMet[node.loop.id])
+          depFail = true;
+        return varName(node.loop.id, node.slot);
       default:
         throw new Error(`Unknown AST node type: ${node.type}`);
     }
+  };
+  const serializeLoop = (loop, id) => {
+    const k = loop.inits.length;
+    if (k === 1)
+      return `${loop.inits[0].dataType} ${varName(id, 0)} = ${serialize(loop.inits[0])}; for (int i = 0; i < ${loop.count}; i++) ${varName(id, 0)} = ${serialize(loop.bodies[0])};\n; \n`;
+    let s = "";
+    for (let j = 0; j < k; j++)
+      s += `${loop.inits[j].dataType} ${varName(id, j)} = ${serialize(loop.inits[j])}; `;
+    s += `for (int i = 0; i < ${loop.count}; i++) { `;
+    for (let j = 0; j < k; j++)
+      s += `${loop.bodies[j].dataType} ${varName(id, j)}_n = ${serialize(loop.bodies[j])}; `;
+    for (let j = 0; j < k; j++)
+      s += `${varName(id, j)} = ${varName(id, j)}_n; `;
+    return s + `}\n`;
   };
   const optimized = optimizeTree(tree);
   for (let i = 0; i < optimized.extracted.length; i++) {
@@ -395,10 +401,10 @@ export const toGLSource = tree => {
       if (depsMet[i])
         continue;
       const expr = optimized.extracted[i];
-      loop_stack.push(i);
       depFail = false;
-      const nPre = `${expr.const ? "const " : ""}${expr.dataType} ${references[i]} = ${serialize(expr)}; \n`;
-      loop_stack.pop();
+      const nPre = expr.type === 'loop'
+        ? serializeLoop(expr, i)
+        : `${expr.const ? "const " : ""}${expr.dataType} ${references[i]} = ${serialize(expr)}; \n`;
       if (depFail)
         continue;
       decls += nPre;
@@ -418,8 +424,11 @@ export const toGLSource = tree => {
 
 const collectUniforms = tree => {
   const out = new Map();
+  const seen = new Set();
   const visit = node => {
     if (!node || typeof node != 'object') return;
+    if (seen.has(node)) return;
+    seen.add(node);
     if (Array.isArray(node)) {
       for (const child of node) visit(child);
       return;
@@ -706,11 +715,31 @@ export const compile = (gl, parseTree, globals) => {
         defs[op.name] = op.ops;
       } else if (op.type === 'loop') {
         const { count, ops: loopOps } = op;
-        const initialValue = stack.pop();
-        stack.push({ type: "loopVar", dataType: initialValue.dataType, const: false });
+        const initials = stack.slice();
+        const loop = { type: 'loop', count, inits: null, bodies: null };
+        const vars = initials.map((v, i) => ({ type: 'loopVar', loop, slot: i, dataType: v.dataType, const: false }));
+        stack.length = 0;
+        for (const v of vars) stack.push(v);
         doOps(loopOps);
-        const body = stack.pop();
-        stack.push({ type: "loop", dataType: initialValue.dataType, initialValue, count, body });
+        const out = stack.slice();
+        if (out.length !== initials.length) {
+          const d = out.length - initials.length;
+          const n = Math.abs(d);
+          throw new Error(`loop body must leave the stack as deep as it found it; it left ${n} ${d > 0 ? 'more' : 'fewer'} ${n === 1 ? 'value' : 'values'} than it started with`);
+        }
+        let p = 0;
+        while (p < vars.length && out[p] === vars[p]) p++;
+        const k = initials.length - p;
+        if (k < 1)
+          throw new Error('loop body must update at least one value');
+        const accVars = vars.slice(p);
+        accVars.forEach((v, j) => { v.slot = j; });
+        loop.inits = initials.slice(p);
+        loop.bodies = out.slice(p);
+        stack.length = 0;
+        for (let i = 0; i < p; i++) stack.push(initials[i]);
+        for (let j = 0; j < k; j++)
+          stack.push({ type: 'loopResult', loop, slot: j, dataType: loop.inits[j].dataType, const: false });
       } else if (op.type === 'freeze') {
         // no-op
       } else if (op.type === 'number') {
