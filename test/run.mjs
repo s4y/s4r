@@ -105,7 +105,7 @@ const fbAcrossDraw = [
 const loopFeedbackAcrossDraw = [
   "fb'f uv tex .x =seed",
   "seed",
-  ":loop 4 dup cdist + sin",
+  ":loop 4 cdist + sin",
   "=acc",
   "acc drawto'f",
   "acc draw",

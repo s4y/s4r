@@ -424,8 +424,11 @@ export const toGLSource = tree => {
 
 const collectUniforms = tree => {
   const out = new Map();
+  const seen = new Set();
   const visit = node => {
     if (!node || typeof node != 'object') return;
+    if (seen.has(node)) return;
+    seen.add(node);
     if (Array.isArray(node)) {
       for (const child of node) visit(child);
       return;
