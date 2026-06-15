@@ -719,19 +719,19 @@ export const compile = (gl, parseTree, globals) => {
         for (const v of vars) stack.push(v);
         doOps(loopOps);
         const out = stack.slice();
+        if (out.length !== initials.length)
+          throw new Error(`loop body must leave the stack as deep as it found it (had ${initials.length}, left ${out.length})`);
         let p = 0;
-        while (p < vars.length && p < out.length && out[p] === vars[p]) p++;
-        const k = out.length - p;
+        while (p < vars.length && out[p] === vars[p]) p++;
+        const k = initials.length - p;
         if (k < 1)
-          throw new Error('loop body must leave at least one value');
-        if (k > initials.length)
-          throw new Error(`loop body left ${k} new values but only ${initials.length} were on the stack to thread`);
-        const accVars = vars.slice(initials.length - k);
+          throw new Error('loop body must update at least one value');
+        const accVars = vars.slice(p);
         accVars.forEach((v, j) => { v.slot = j; });
-        loop.inits = initials.slice(initials.length - k);
+        loop.inits = initials.slice(p);
         loop.bodies = out.slice(p);
         stack.length = 0;
-        for (let i = 0; i < initials.length - k; i++) stack.push(initials[i]);
+        for (let i = 0; i < p; i++) stack.push(initials[i]);
         for (let j = 0; j < k; j++)
           stack.push({ type: 'loopResult', loop, slot: j, dataType: loop.inits[j].dataType, const: false });
       } else if (op.type === 'freeze') {

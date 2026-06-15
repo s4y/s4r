@@ -129,7 +129,7 @@ check('draw declares only the uniforms it uses', () => {
 });
 
 check('single-value loop unchanged', () => {
-  const { preamble } = firstDraw("0\n:loop 5 dup 1 +\nvec4.1 draw");
+  const { preamble } = firstDraw("0\n:loop 5 1 +\nvec4.1 draw");
   assert(/float var_0 = 0\.; for \(int i = 0; i < 5; i\+\+\) var_0 = \(var_0 \+ 1\.\);/.test(preamble), preamble);
   assert(!/var_0_1/.test(preamble), `should not declare a 2nd accumulator: ${preamble}`);
 });
@@ -146,12 +146,16 @@ check('loop preserves context below accumulators', () => {
   assert(/7\./.test(expr), `context value missing: ${expr}`);
 });
 
-check('loop body leaving nothing is rejected', () => {
-  throws(/at least one value/, () => firstDraw("1\n:loop 3 =x\nvec4.1 draw"));
+check('unbalanced loop body is rejected (dup 1 +)', () => {
+  throws(/as deep as it found it/, () => firstDraw("0\n:loop 5 dup 1 +\nvec4.1 draw"));
 });
 
-check('loop leaving more than it threads is rejected', () => {
-  throws(/only 1 were on the stack/, () => firstDraw("1\n:loop 3 1 2\nvec4.1 draw"));
+check('loop body that consumes without replacing is rejected', () => {
+  throws(/as deep as it found it/, () => firstDraw("1\n:loop 3 =x\nvec4.1 draw"));
+});
+
+check('no-op loop body is rejected', () => {
+  throws(/update at least one value/, () => firstDraw("1\n:loop 3\n\nvec4.1 draw"));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
