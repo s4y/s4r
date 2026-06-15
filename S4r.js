@@ -416,10 +416,6 @@ export const toGLSource = tree => {
   return { preamble: decls, expr };
 };
 
-// Walks an expression tree, collecting the unique uniform descriptors carried
-// by its symbol nodes. A uniform travels with the value that references it, so
-// each draw declares and binds exactly the uniforms it actually uses — even
-// when a value (e.g. a captured `fb'…` sample) is reused in a later draw.
 const collectUniforms = tree => {
   const out = new Map();
   const visit = node => {
@@ -520,8 +516,6 @@ export const compile = (gl, parseTree, globals) => {
     }); }}],
   });
 
-  // A symbol node backed by a runtime uniform. The descriptor rides along on
-  // the node so the uniform is declared/bound for whichever draw uses it.
   const uniformSymbol = (name, dataType, valueType, getValue) => ({
     type: 'symbol',
     dataType,
@@ -530,9 +524,6 @@ export const compile = (gl, parseTree, globals) => {
     uniform: { name, valueType, get value() { return getValue(); } },
   });
 
-  // A sampler2D uniform fed from an audio byte buffer. Uploading the latest
-  // samples happens when the uniform is bound, so the sampler the shader reads
-  // and the texture that gets refreshed are one and the same.
   const audioTexture = (name, key, getData) => {
     if (gl && !globals.framebuffers[key])
       globals.framebuffers[key] = createFB(gl, getData().length, 1);
@@ -798,8 +789,6 @@ const compileFragShader = (gl, s) => {
 const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
   const newRuntimeTasks = [];
 
-  // The always-present built-ins, plus the uniforms this particular draw's
-  // expression references (collected at compile time).
   const drawUniforms = task => {
     const uniforms = {
       t: {

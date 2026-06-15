@@ -21,9 +21,7 @@ const files = readdirSync(casesDir).filter(f => f.endsWith('.s4r')).sort();
 let passed = 0;
 let failed = 0;
 
-// Uniforms a draw declares: its built-ins plus everything its expression uses.
 const declared = task => new Set(['t', 'aspect', ...(task.uniforms || []).map(u => u.name)]);
-// Uniform-looking identifiers the emitted GLSL actually references.
 const used = task => new Set(
   [...`${task.preamble} ${task.expr}`.matchAll(/\b(?:fb_|u_)[A-Za-z0-9_]+\b/g)].map(m => m[0]));
 
@@ -42,8 +40,6 @@ const check = (name, fn) => {
 const common = readFileSync(join(__dir, '..', 'common.s4r'), 'utf8') + '\n';
 const compileDraws = src => transform(common + src).filter(t => t.type === 'draw');
 
-// Every draw must declare every uniform it references — no matter how many
-// draw boundaries sit between where a value is built and where it is used.
 const assertUniformsResolve = (label, src) => {
   const draws = compileDraws(src);
   draws.forEach((task, i) => {
@@ -89,9 +85,6 @@ for (const file of files) {
   }
 }
 
-// A framebuffer sampled into a variable, then drawn after a `drawto` boundary,
-// must still carry its sampler uniform on the later draw.
-// (Sources are left-aligned: a line of leading whitespace is its own token.)
 const fbAcrossDraw = [
   "fb'f uv tex =prev",
   "p .x drawto'f",
@@ -111,12 +104,10 @@ check('uniform survives draw boundary', () => {
   assertUniformsResolve('fb-across-draw', fbAcrossDraw);
 });
 
-// Same, but the feedback sample seeds a loop accumulator reused across a draw.
 check('loopVar+uniform survive draw boundary', () => {
   assertUniformsResolve('loop-feedback-across-draw', loopFeedbackAcrossDraw);
 });
 
-// The first draw should not be saddled with a uniform only a later draw uses.
 check('draw declares only the uniforms it uses', () => {
   const draws = compileDraws(fbAcrossDraw);
   const names = i => (draws[i].uniforms || []).map(u => u.name);
