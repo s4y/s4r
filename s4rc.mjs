@@ -31,19 +31,30 @@ const source = commonPrefix + (
     : readFileSync('/dev/stdin', 'utf8')
 );
 
+// The compiled tree is cyclic (loopVar -> loop -> body -> loopVar).
+const safeReplacer = () => {
+  const seen = new WeakSet();
+  return (k, v) => {
+    if (typeof v === 'function') return '[fn]';
+    if (v && typeof v === 'object') {
+      if (seen.has(v)) return '[circular]';
+      seen.add(v);
+    }
+    return v;
+  };
+};
+
 try {
   if (flags.has('--ast')) {
     const tree = parse(source);
-    const clean = JSON.parse(JSON.stringify(tree, (k, v) => typeof v === 'function' ? '[fn]' : v));
-    process.stdout.write(JSON.stringify(clean, null, 2) + '\n');
+    process.stdout.write(JSON.stringify(tree, safeReplacer(), 2) + '\n');
     process.exit(0);
   }
 
   const tasks = transform(source);
 
   if (flags.has('--tasks')) {
-    const clean = JSON.parse(JSON.stringify(tasks, (k, v) => typeof v === 'function' ? '[fn]' : v));
-    process.stdout.write(JSON.stringify(clean, null, 2) + '\n');
+    process.stdout.write(JSON.stringify(tasks, safeReplacer(), 2) + '\n');
     process.exit(0);
   }
 
