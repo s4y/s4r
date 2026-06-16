@@ -475,23 +475,10 @@ export const toGLSource = tree => {
 
 const collectUniforms = tree => {
   const out = new Map();
-  const seen = new Set();
-  const visit = node => {
-    if (!node || typeof node != 'object') return;
-    if (seen.has(node)) return;
-    seen.add(node);
-    if (Array.isArray(node)) {
-      for (const child of node) visit(child);
-      return;
-    }
+  traverse(tree, node => {
     if (node.uniform)
       out.set(node.uniform.name, node.uniform);
-    for (const k in node) {
-      if (k != 'uniform')
-        visit(node[k]);
-    }
-  };
-  visit(tree);
+  });
   return [...out.values()];
 };
 
