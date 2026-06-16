@@ -30,20 +30,10 @@ const glTypeFromBinaryOperationOnTypes = (l, r) => {
   throw new Error(`Unknown type pair for binary op: ${l}, ${r}`);
 };
 
-const wrapFragShader = (body, defs) => `
-#extension GL_OES_standard_derivatives : enable
-precision highp float;
-
-varying vec3 p;
-
-const float PI = asin(1.0) * 2.;
-
-float easeInOutQuad(float t) {
-  return t<.5 ? 2.*t*t : -1.+(4.-2.*t)*t;
-}
-
-// https://stackoverflow.com/questions/15095909/from-rgb-to-hsv-in-opengl-glsl
-vec3 rgb2hsv(vec3 c) {
+export const defaultBuiltins = {
+  rgb2hsv: {
+    // https://stackoverflow.com/questions/15095909/from-rgb-to-hsv-in-opengl-glsl
+    source: `vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
     vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
     vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
@@ -51,17 +41,18 @@ vec3 rgb2hsv(vec3 c) {
     float d = q.x - min(q.w, q.y);
     float e = 1.0e-10;
     return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
-}
-
-vec3 hsv2rgb(vec3 c)
+}`,
+  },
+  hsv2rgb: {
+    source: `vec3 hsv2rgb(vec3 c)
 {
     vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
     vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-}
-
-
-mat4 perspectiveProj(float fov, float aspect, float near, float far) {
+}`,
+  },
+  perspectiveProj: {
+    source: `mat4 perspectiveProj(float fov, float aspect, float near, float far) {
   float f = 1.0 / tan(fov/2.0);
   return mat4(
     f / aspect, 0.0, 0.0, 0.0,
@@ -69,10 +60,11 @@ mat4 perspectiveProj(float fov, float aspect, float near, float far) {
     0.0, 0.0, (far + near) / (far - near), 1.0,
     0.0, 0.0, (2.0 * far * near) / (near - far), 0.0
   );
-}
-
-// https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
-float sdBoundingBox( vec3 p, vec3 b, float e )
+}`,
+  },
+  sdBoundingBox: {
+    // https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
+    source: `float sdBoundingBox( vec3 p, vec3 b, float e )
 {
        p = abs(p  )-b;
   vec3 q = abs(p+e)-e;
@@ -80,14 +72,70 @@ float sdBoundingBox( vec3 p, vec3 b, float e )
       length(max(vec3(p.x,q.y,q.z),0.0))+min(max(p.x,max(q.y,q.z)),0.0),
       length(max(vec3(q.x,p.y,q.z),0.0))+min(max(q.x,max(p.y,q.z)),0.0)),
       length(max(vec3(q.x,q.y,p.z),0.0))+min(max(q.x,max(q.y,p.z)),0.0));
-}
-
-// https://www.iquilezles.org/www/articles/bandlimiting/bandlimiting.htm
-float fsin(float x) {
+}`,
+  },
+  fsin: {
+    // https://www.iquilezles.org/www/articles/bandlimiting/bandlimiting.htm
+    source: `float fsin(float x) {
  float w = fwidth(x);
  return sin(x) * sin(0.5*w)/(0.5*w);
-}
+}`,
+  },
+};
 
+// Walk an AST node, calling visit(node) on each object node once. The tree is
+// cyclic (loopVar -> loop -> body -> loopVar), hence the seen guard. The
+// `uniform` key holds a runtime value provider, not AST, so it's never
+// descended into (its `value` getter has side effects).
+const traverse = (root, visit) => {
+  const seen = new Set();
+  const walk = node => {
+    if (!node || typeof node != 'object' || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    visit(node);
+    for (const k in node)
+      if (k != 'uniform') walk(node[k]);
+  };
+  walk(root);
+};
+
+export const collectBuiltins = tree => {
+  const out = new Set();
+  traverse(tree, node => {
+    if (node.type == 'invocation' && node.glName)
+      out.add(node.glName);
+  });
+  return out;
+};
+
+export const builtinSource = (usedNames, registry = defaultBuiltins) => {
+  const ordered = [];
+  const emitted = new Set();
+  const emit = name => {
+    if (emitted.has(name)) return;
+    const entry = registry[name];
+    if (!entry) return;
+    emitted.add(name);
+    for (const dep of entry.deps || []) emit(dep);
+    ordered.push(entry.source);
+  };
+  for (const name of usedNames) emit(name);
+  return ordered.join('\n\n');
+};
+
+const wrapFragShader = (body, defs, builtins) => `
+#extension GL_OES_standard_derivatives : enable
+precision highp float;
+
+varying vec3 p;
+
+const float PI = asin(1.0) * 2.;
+
+${builtins || ""}
 
 ${defs || ""}
 
@@ -359,7 +407,8 @@ export const toGLSource = tree => {
         return `${serialize(node.value)}.${node.components}`;
       case "literal": {
         let ns = node.value.toString();
-        if (ns.indexOf('.') === -1)
+        // exponent form (e.g. "1e-10") is already a valid float; don't add '.'
+        if (!/[.eE]/.test(ns))
           ns += '.';
         return ns;
       }
@@ -426,23 +475,10 @@ export const toGLSource = tree => {
 
 const collectUniforms = tree => {
   const out = new Map();
-  const seen = new Set();
-  const visit = node => {
-    if (!node || typeof node != 'object') return;
-    if (seen.has(node)) return;
-    seen.add(node);
-    if (Array.isArray(node)) {
-      for (const child of node) visit(child);
-      return;
-    }
+  traverse(tree, node => {
     if (node.uniform)
       out.set(node.uniform.name, node.uniform);
-    for (const k in node) {
-      if (k != 'uniform')
-        visit(node[k]);
-    }
-  };
-  visit(tree);
+  });
   return [...out.values()];
 };
 
@@ -795,11 +831,13 @@ export function transform(source, globals = {}) {
     setTimeVelocity() {},
     ...globals,
   };
+  const registry = { ...defaultBuiltins, ...(g.builtins || {}) };
   const tasks = compile(null, parse(source), g);
   return tasks.map(task => {
     if (task.type !== 'draw') return task;
     const { preamble, expr } = toGLSource(task.frag);
-    return { ...task, preamble, expr };
+    const builtins = builtinSource(collectBuiltins(task.frag), registry);
+    return { ...task, preamble, expr, builtins };
   });
 }
 
@@ -819,6 +857,7 @@ const compileFragShader = (gl, s) => {
 
 const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
   const newRuntimeTasks = [];
+  const registry = { ...defaultBuiltins, ...(globals.builtins || {}) };
 
   const drawUniforms = task => {
     const uniforms = {
@@ -847,7 +886,8 @@ const buildRuntimeTasks = (gl, vs, buffer, tasks, globals) => {
 
       const { preamble, expr: exprText } = toGLSource(task.frag);
       const progText = `${preamble}\ngl_FragColor = ${exprText};`;
-      const shaderText = wrapFragShader(progText, uniformDefs);
+      const builtins = builtinSource(collectBuiltins(task.frag), registry);
+      const shaderText = wrapFragShader(progText, uniformDefs, builtins);
 
       let fs;
       try {

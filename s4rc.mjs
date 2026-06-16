@@ -75,6 +75,7 @@ try {
         'varying vec3 p;',
         'const float PI = asin(1.0) * 2.;',
         uniformDefs,
+        ...(task.builtins ? ['// --- builtins ---', task.builtins] : []),
         '// --- preamble ---',
         body,
       ].join('\n') + '\n');

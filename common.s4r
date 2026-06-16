@@ -105,14 +105,7 @@ mat4 =kIdentity
   0 0 0 1
  } mat4
 
-:def perspectiveProj
- { =far =near =aspect =fov
-  1 fov 2 / tan / =f
-  f aspect / 0 0 0
-  0 f 0 0
-  0 0 far near + far near - / 1
-  0 0 2 far * near * near far - / 0
- } mat4
+:fn perspectiveProj 4 mat4
 
 :def smin { =k =b =a
  0.5 0.5 b a - * k / + 0 1 clamp =h

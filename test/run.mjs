@@ -162,5 +162,35 @@ check('builtin with too few arguments is rejected', () => {
   throws(/needs 2 argument\(s\), but only 1 available/, () => firstDraw("1 pow\nvec4.1 draw"));
 });
 
+check('tiny/huge literals serialize to valid GLSL floats', () => {
+  const { expr: small } = firstDraw('0.00000000001 vec4.1 draw');
+  assert(/1e-11\b/.test(small) && !/1e-11\./.test(small), `small literal: ${small}`);
+  const { expr: big } = firstDraw('1000000000000000000000 vec4.1 draw');
+  assert(!/e\+?\d+\./.test(big), `huge literal should be valid GLSL: ${big}`);
+  const { expr: plain } = firstDraw('5 vec4.1 draw');
+  assert(/vec4\(5\.\)/.test(plain), `plain literal: ${plain}`);
+});
+
+check('only used builtins are injected', () => {
+  const [task] = compileDraws('p .xyz rgb2hsv hsv2rgb 1 vec4.2 draw');
+  assert(/vec3 rgb2hsv\(/.test(task.builtins), `rgb2hsv should be injected: ${task.builtins}`);
+  assert(/vec3 hsv2rgb\(/.test(task.builtins), `hsv2rgb should be injected: ${task.builtins}`);
+  assert(!/sdBoundingBox/.test(task.builtins), `unused sdBoundingBox should be absent: ${task.builtins}`);
+  assert(!/fsin/.test(task.builtins), `unused fsin should be absent: ${task.builtins}`);
+});
+
+check('no builtins injected when none used', () => {
+  const [task] = compileDraws('t vec4.1 draw');
+  assert(task.builtins === '', `expected empty builtins, got: ${JSON.stringify(task.builtins)}`);
+});
+
+check('custom builtins supplied via globals are injected', () => {
+  const src = ':fn myHelper 1 vec3\np .xyz myHelper 1 vec4.2 draw';
+  const source = 'vec3 myHelper(vec3 c) { return c * 2.0; }';
+  const draws = transform(common + src, { builtins: { myHelper: { source } } })
+    .filter(t => t.type === 'draw');
+  assert(/vec3 myHelper\(/.test(draws[0].builtins), `custom builtin should be injected: ${draws[0].builtins}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
