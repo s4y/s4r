@@ -163,6 +163,8 @@ export const parse = s => {
               type: 'define',
               name,
               ops: [{ type: 'native', fn: stack => {
+                if (stack.length < arity)
+                  throw new Error(`\`${name}\` needs ${arity} argument(s), but only ${stack.length} available on the stack.`);
                 const args = stack.splice(stack.length-arity, arity);
                 stack.push({
                   type: 'invocation',

@@ -158,5 +158,9 @@ check('no-op loop body is rejected', () => {
   throws(/update at least one value/, () => firstDraw("1\n:loop 3\n\nvec4.1 draw"));
 });
 
+check('builtin with too few arguments is rejected', () => {
+  throws(/needs 2 argument\(s\), but only 1 available/, () => firstDraw("1 pow\nvec4.1 draw"));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
