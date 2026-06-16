@@ -162,6 +162,15 @@ check('builtin with too few arguments is rejected', () => {
   throws(/needs 2 argument\(s\), but only 1 available/, () => firstDraw("1 pow\nvec4.1 draw"));
 });
 
+check('tiny/huge literals serialize to valid GLSL floats', () => {
+  const { expr: small } = firstDraw('0.00000000001 vec4.1 draw');
+  assert(/1e-11\b/.test(small) && !/1e-11\./.test(small), `small literal: ${small}`);
+  const { expr: big } = firstDraw('1000000000000000000000 vec4.1 draw');
+  assert(!/e\+?\d+\./.test(big), `huge literal should be valid GLSL: ${big}`);
+  const { expr: plain } = firstDraw('5 vec4.1 draw');
+  assert(/vec4\(5\.\)/.test(plain), `plain literal: ${plain}`);
+});
+
 check('only used builtins are injected', () => {
   const [task] = compileDraws('p .xyz rgb2hsv hsv2rgb 1 vec4.2 draw');
   assert(/vec3 rgb2hsv\(/.test(task.builtins), `rgb2hsv should be injected: ${task.builtins}`);

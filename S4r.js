@@ -407,7 +407,8 @@ export const toGLSource = tree => {
         return `${serialize(node.value)}.${node.components}`;
       case "literal": {
         let ns = node.value.toString();
-        if (ns.indexOf('.') === -1)
+        // exponent form (e.g. "1e-10") is already a valid float; don't add '.'
+        if (!/[.eE]/.test(ns))
           ns += '.';
         return ns;
       }
