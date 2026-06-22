@@ -41,8 +41,9 @@
 :fn normalize 1
 :fn sdBoundingBox 3 float
 
-:def dup { =x x x }
+:def drop { =x }
 :def swap { =x =y x y }
+:def dup { =x x x }
 
 :def unbal 2. / .5 +
 :def bal 2. * 1 -
