@@ -74,6 +74,13 @@
 
 :def webcam fb'webcam uv tex
 
+:def poly { =n
+ PI 2 * n / =r
+ angle PI + =a
+ a r / 0.5 + floor
+ r * a - cos
+ p .xy length * }
+
 1 0 0 0
 0 1 0 0
 0 0 1 0
